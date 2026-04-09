@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Auth Server</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="loading-screen">
+      <div class="loading-mark">
+        <span class="lm-bracket">[</span>
+        <span class="lm-icon">⬡</span>
+        <span class="lm-bracket">]</span>
+      </div>
+    </div>
+
+    <!-- AUTH VIEWS -->
+    <div id="view-auth" class="view hidden">
+      <div class="auth-split">
+        <div class="auth-brand">
+          <div class="brand-lockup">
+            <div class="brand-mark">⬡</div>
+            <div class="brand-text">
+              <span class="brand-name">AuthServer</span>
+              <span class="brand-domain" id="brand-domain">auth-test.javagrant.ac.nz</span>
+            </div>
+          </div>
+          <p class="brand-tagline">Secure. Scoped.<br /><em>Subdomain-native.</em></p>
+          <div class="brand-features">
+            <div class="feat">⬡ Passkey authentication</div>
+            <div class="feat">⬡ TOTP two-factor auth</div>
+            <div class="feat">⬡ Scoped session cookies</div>
+            <div class="feat">⬡ Fresh-auth sensitive actions</div>
+          </div>
+        </div>
+
+        <div class="auth-panel">
+          <!-- Login form -->
+          <div id="form-login" class="auth-form active">
+            <h2 class="form-title">Sign in</h2>
+            <div class="passkey-btn-wrap">
+              <button class="btn-passkey" id="btn-passkey-login">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M20 21a8 8 0 1 0-16 0"/><circle cx="19" cy="17" r="3"/><line x1="22" y1="17" x2="19" y2="17"/></svg>
+                Continue with Passkey
+              </button>
+            </div>
+            <div class="divider"><span>or</span></div>
+            <div class="field">
+              <label>Username or email</label>
+              <input type="text" id="login-username" autocomplete="username" placeholder="you@example.com" />
+            </div>
+            <div class="field">
+              <label>Password</label>
+              <input type="password" id="login-password" autocomplete="current-password" placeholder="••••••••" />
+            </div>
+            <button class="btn-primary" id="btn-login">Sign in</button>
+            <p class="form-switch">No account? <a href="#" id="go-register">Create one</a></p>
+          </div>
+
+          <!-- 2FA form -->
+          <div id="form-2fa" class="auth-form">
+            <h2 class="form-title">Two-factor auth</h2>
+            <p class="form-hint">Enter the 6-digit code from your authenticator app.</p>
+            <div class="field">
+              <label>Code</label>
+              <input type="text" id="totp-code" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
+            </div>
+            <button class="btn-primary" id="btn-2fa-verify">Verify</button>
+            <p class="form-switch"><a href="#" id="go-back-login">← Back to login</a></p>
+          </div>
+
+          <!-- Register form -->
+          <div id="form-register" class="auth-form">
+            <h2 class="form-title">Create account</h2>
+            <div class="field">
+              <label>Username</label>
+              <input type="text" id="reg-username" autocomplete="username" placeholder="your_handle" />
+            </div>
+            <div class="field">
+              <label>Email</label>
+              <input type="email" id="reg-email" autocomplete="email" placeholder="you@example.com" />
+            </div>
+            <div class="field">
+              <label>Password</label>
+              <input type="password" id="reg-password" autocomplete="new-password" placeholder="min. 8 characters" />
+            </div>
+            <button class="btn-primary" id="btn-register">Create account</button>
+            <p class="form-switch">Already have one? <a href="#" id="go-login">Sign in</a></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DASHBOARD -->
+    <div id="view-dashboard" class="view hidden">
+      <header class="dash-header">
+        <div class="dash-logo">
+          <span class="brand-mark-sm">⬡</span>
+          <span>AuthServer</span>
+        </div>
+        <div class="dash-user">
+          <span id="dash-username" class="dash-username-label"></span>
+          <button class="btn-ghost" id="btn-logout">Logout</button>
+        </div>
+      </header>
+
+      <main class="dash-main">
+        <nav class="dash-nav">
+          <button class="nav-btn active" data-tab="overview">Overview</button>
+          <button class="nav-btn" data-tab="security">Security</button>
+          <button class="nav-btn" data-tab="passkeys">Passkeys</button>
+          <button class="nav-btn" data-tab="sessions">Sessions</button>
+          <button class="nav-btn" data-tab="sensitive">Sensitive Actions</button>
+        </nav>
+
+        <!-- OVERVIEW TAB -->
+        <section id="tab-overview" class="dash-tab active">
+          <h2 class="tab-title">Account Overview</h2>
+          <div class="info-grid">
+            <div class="info-card">
+              <div class="info-label">Username</div>
+              <div class="info-value" id="ov-username">—</div>
+            </div>
+            <div class="info-card">
+              <div class="info-label">Email</div>
+              <div class="info-value" id="ov-email">—</div>
+            </div>
+            <div class="info-card">
+              <div class="info-label">Login method</div>
+              <div class="info-value" id="ov-method">—</div>
+            </div>
+            <div class="info-card">
+              <div class="info-label">2FA</div>
+              <div class="info-value" id="ov-2fa">—</div>
+            </div>
+            <div class="info-card">
+              <div class="info-label">Passkeys</div>
+              <div class="info-value" id="ov-passkeys">—</div>
+            </div>
+          </div>
+
+          <h3 class="section-title">Profile</h3>
+          <div class="profile-form">
+            <div class="field">
+              <label>Display name</label>
+              <input type="text" id="prof-display-name" placeholder="Your Name" />
+            </div>
+            <div class="field">
+              <label>Bio <span class="char-count"><span id="bio-len">0</span>/500</span></label>
+              <textarea id="prof-bio" rows="3" placeholder="Tell the world about yourself…"></textarea>
+            </div>
+            <div class="field">
+              <label>Location</label>
+              <input type="text" id="prof-location" placeholder="Auckland, NZ" />
+            </div>
+            <div class="field">
+              <label>Website</label>
+              <input type="url" id="prof-website" placeholder="https://yoursite.com" />
+            </div>
+            <button class="btn-primary" id="btn-save-profile">Save profile</button>
+          </div>
+        </section>
+
+        <!-- SECURITY TAB -->
+        <section id="tab-security" class="dash-tab hidden">
+          <h2 class="tab-title">Security Settings</h2>
+
+          <div class="security-block" id="block-2fa">
+            <div class="security-block-header">
+              <div>
+                <h3>Authenticator app (TOTP)</h3>
+                <p id="totp-status-text">Protect your account with a time-based one-time password.</p>
+              </div>
+              <div class="security-badge" id="badge-2fa">OFF</div>
+            </div>
+            <div id="totp-setup-area" class="hidden">
+              <div class="qr-wrap">
+                <img id="totp-qr" alt="QR code" />
+                <div class="qr-manual">
+                  <span>Manual key:</span>
+                  <code id="totp-secret-display"></code>
+                </div>
+              </div>
+              <div class="field">
+                <label>Enter code to confirm</label>
+                <input type="text" id="totp-confirm-code" inputmode="numeric" maxlength="6" placeholder="000000" />
+              </div>
+              <div class="btn-row">
+                <button class="btn-primary" id="btn-confirm-2fa">Confirm &amp; enable</button>
+                <button class="btn-ghost" id="btn-cancel-2fa">Cancel</button>
+              </div>
+            </div>
+            <div id="totp-disable-area" class="hidden">
+              <div class="field">
+                <label>Current password</label>
+                <input type="password" id="disable-2fa-password" placeholder="••••••••" />
+              </div>
+              <div class="field">
+                <label>Current 2FA code</label>
+                <input type="text" id="disable-2fa-code" inputmode="numeric" maxlength="6" placeholder="000000" />
+              </div>
+              <div class="btn-row">
+                <button class="btn-danger" id="btn-confirm-disable-2fa">Disable 2FA</button>
+                <button class="btn-ghost" id="btn-cancel-disable-2fa">Cancel</button>
+              </div>
+            </div>
+            <div class="btn-row" id="totp-action-btns">
+              <button class="btn-secondary" id="btn-setup-2fa">Set up 2FA</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- PASSKEYS TAB -->
+        <section id="tab-passkeys" class="dash-tab hidden">
+          <h2 class="tab-title">Passkeys</h2>
+          <p class="tab-desc">Passkeys let you sign in with biometrics or device PIN — no password needed.</p>
+
+          <div class="btn-row" style="margin-bottom:1.5rem">
+            <button class="btn-primary" id="btn-add-passkey">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add passkey
+            </button>
+          </div>
+
+          <div id="passkeys-list" class="passkeys-list">
+            <div class="empty-state">No passkeys registered yet.</div>
+          </div>
+
+          <!-- Add passkey modal -->
+          <div id="modal-add-passkey" class="modal hidden">
+            <div class="modal-box">
+              <h3>Add a new passkey</h3>
+              <div class="field">
+                <label>Passkey name</label>
+                <input type="text" id="new-passkey-name" placeholder="My MacBook, iPhone 15…" />
+              </div>
+              <div class="btn-row">
+                <button class="btn-primary" id="btn-confirm-add-passkey">Create passkey</button>
+                <button class="btn-ghost" id="btn-cancel-add-passkey">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- SESSIONS TAB -->
+        <section id="tab-sessions" class="dash-tab hidden">
+          <h2 class="tab-title">Active Sessions</h2>
+          <p class="tab-desc">All active login sessions for your account. Revoke any you don't recognise.</p>
+          <div id="sessions-list" class="sessions-list"></div>
+        </section>
+
+        <!-- SENSITIVE ACTIONS TAB -->
+        <section id="tab-sensitive" class="dash-tab hidden">
+          <h2 class="tab-title">Sensitive Actions</h2>
+          <p class="tab-desc">These actions require you to re-verify your identity first (fresh auth within 5 minutes).</p>
+
+          <div class="fresh-auth-status" id="fresh-auth-banner">
+            <div class="fab-icon">🔒</div>
+            <div class="fab-text">
+              <strong>Identity verification required</strong>
+              <span>Re-verify to unlock sensitive actions</span>
+            </div>
+            <button class="btn-secondary" id="btn-open-fresh-auth">Verify now</button>
+          </div>
+
+          <div class="fresh-auth-status fresh-verified hidden" id="fresh-auth-ok">
+            <div class="fab-icon">✅</div>
+            <div class="fab-text">
+              <strong>Identity verified</strong>
+              <span id="fresh-auth-expiry">Valid for 5:00</span>
+            </div>
+          </div>
+
+          <div class="actions-grid">
+            <div class="action-card" data-action="view-secret">
+              <div class="action-icon">🔑</div>
+              <h4>View secret token</h4>
+              <p>Reveal your account's secret API token.</p>
+              <button class="btn-action">Perform</button>
+            </div>
+            <div class="action-card" data-action="export-data">
+              <div class="action-icon">📦</div>
+              <h4>Export account data</h4>
+              <p>Download a full copy of your account data.</p>
+              <button class="btn-action">Perform</button>
+            </div>
+            <div class="action-card" data-action="change-email">
+              <div class="action-icon">✉️</div>
+              <h4>Change email</h4>
+              <p>Update the email address on your account.</p>
+              <button class="btn-action">Perform</button>
+            </div>
+            <div class="action-card" data-action="delete-account-request">
+              <div class="action-icon">⚠️</div>
+              <h4>Delete account</h4>
+              <p>Schedule your account for deletion.</p>
+              <button class="btn-action btn-danger-soft">Perform</button>
+            </div>
+          </div>
+
+          <div id="action-result" class="action-result hidden">
+            <h4>Result</h4>
+            <pre id="action-result-pre"></pre>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- FRESH AUTH MODAL -->
+    <div id="modal-fresh-auth" class="modal hidden">
+      <div class="modal-box">
+        <h3>Verify your identity</h3>
+        <p class="modal-hint">Choose how to re-authenticate to continue.</p>
+
+        <div class="method-tabs">
+          <button class="method-tab active" data-method="password">Password</button>
+          <button class="method-tab" data-method="totp" id="fresh-totp-tab">Authenticator</button>
+        </div>
+
+        <div id="fresh-method-password" class="fresh-method">
+          <div class="field">
+            <label>Password</label>
+            <input type="password" id="fresh-password" placeholder="••••••••" />
+          </div>
+        </div>
+        <div id="fresh-method-totp" class="fresh-method hidden">
+          <div class="field">
+            <label>2FA code</label>
+            <input type="text" id="fresh-totp" inputmode="numeric" maxlength="6" placeholder="000000" />
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn-primary" id="btn-confirm-fresh-auth">Verify</button>
+          <button class="btn-ghost" id="btn-cancel-fresh-auth">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CHANGE EMAIL MODAL -->
+    <div id="modal-change-email" class="modal hidden">
+      <div class="modal-box">
+        <h3>Change email</h3>
+        <div class="field">
+          <label>New email address</label>
+          <input type="email" id="new-email-input" placeholder="new@example.com" />
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="btn-confirm-email-change">Send verification</button>
+          <button class="btn-ghost" id="btn-cancel-email-change">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOAST -->
+    <div id="toast-container"></div>
+  </div>
+
+  <script src="/js/app.js"></script>
+</body>
+</html>
