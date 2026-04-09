@@ -9,7 +9,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
-import { initAuthDb, initUserDb } from './db/init.js';
+import { randomUUID } from 'crypto';
+import { initAuthDb, initUserDb, authDb } from './db/init.js';
 import SQLiteStore from './db/sessionStore.js';
 import authRoutes from './routes/auth.js';
 import passkeyRoutes from './routes/passkeys.js';
@@ -127,6 +128,31 @@ app.get(/^(?!\/api).*/, (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error('[error]', err);
+
+  // LOG TO DATABASE
+  try {
+    authDb.prepare(`
+      INSERT INTO system_logs (id, level, source, message, stack, context, user_id, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      randomUUID(),
+      'error',
+      'server',
+      err.message || String(err),
+      err.stack || null,
+      JSON.stringify({
+        url: req.url,
+        method: req.method,
+        ip: req.ip,
+        userAgent: req.get('user-agent')
+      }),
+      req.session?.userId || null,
+      Date.now()
+    );
+  } catch (logErr) {
+    console.error('[critical] Failed to write to system_logs:', logErr);
+  }
+
   if (res.headersSent) return next(err); // Don't attempt to send another response
   res.status(500).json({ error: IS_PROD ? 'Internal server error' : err.message });
 });

@@ -25,6 +25,36 @@ async function api(path, options = {}) {
   return data;
 }
 
+/**
+ * Report an error to the server and show a toast to the user.
+ */
+async function reportError(error, context = {}) {
+  const isString = typeof error === 'string';
+  const message = isString ? error : (error.message || String(error));
+  const stack = isString ? null : (error.stack || null);
+  
+  console.error(`[error] ${message}`, { error, context });
+
+  // Reporting to server (fire-and-forget)
+  fetch('/api/auth/report-error', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ level: 'error', message, stack, context }),
+  }).catch(e => console.warn('[critical] Failed to report error to server:', e));
+
+  // Show user feedback
+  toast(message, 'error');
+}
+
+// Global error handling
+window.onerror = (message, source, lineno, colno, error) => {
+  reportError(error || message, { source, lineno, colno, type: 'global' });
+};
+
+window.onunhandledrejection = (event) => {
+  reportError(event.reason, { type: 'promise_rejection' });
+};
+
 function formatDate(ts) {
   if (!ts) return 'Never';
   return new Date(ts).toLocaleDateString('en-NZ', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -37,7 +67,6 @@ function bufferToBase64url(buf) {
   for (const b of bytes) str += String.fromCharCode(b);
   return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
-
 function base64urlToBuffer(str) {
   str = str.replace(/-/g, '+').replace(/_/g, '/');
   while (str.length % 4) str += '=';
@@ -45,6 +74,27 @@ function base64urlToBuffer(str) {
   const buf = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
   return buf.buffer;
+}
+
+/**
+ * Synchronize the browser's credential storage with the server's list of valid passkeys.
+ * Uses the WebAuthn Signal API (if available) to remove stale/deleted credentials.
+ */
+async function syncPasskeysWithDevice(credentialIds) {
+  if (!window.PublicKeyCredential || !PublicKeyCredential.signalAllAcceptedCredentials) {
+    return { supported: false }; // Silently fail for older browsers
+  }
+
+  try {
+    const ids = credentialIds.map(id => base64urlToBuffer(id));
+    await PublicKeyCredential.signalAllAcceptedCredentials({
+      credentialIds: ids
+    });
+    return { supported: true, success: true };
+  } catch (err) {
+    console.warn('[passkey] Signal API error:', err);
+    return { supported: true, success: false };
+  }
 }
 
 // Encode all credential fields to/from ArrayBuffer <-> base64url
@@ -75,7 +125,7 @@ function serializeRegistrationCredential(cred) {
     rawId: bufferToBase64url(cred.rawId),
     type: cred.type,
     response: {
-      clientDataJSON:    bufferToBase64url(cred.response.clientDataJSON),
+      clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
       attestationObject: bufferToBase64url(cred.response.attestationObject),
       transports: cred.response.getTransports ? cred.response.getTransports() : [],
     },
@@ -88,10 +138,10 @@ function serializeAuthenticationCredential(cred) {
     rawId: bufferToBase64url(cred.rawId),
     type: cred.type,
     response: {
-      clientDataJSON:    bufferToBase64url(cred.response.clientDataJSON),
+      clientDataJSON: bufferToBase64url(cred.response.clientDataJSON),
       authenticatorData: bufferToBase64url(cred.response.authenticatorData),
-      signature:         bufferToBase64url(cred.response.signature),
-      userHandle:        cred.response.userHandle ? bufferToBase64url(cred.response.userHandle) : null,
+      signature: bufferToBase64url(cred.response.signature),
+      userHandle: cred.response.userHandle ? bufferToBase64url(cred.response.userHandle) : null,
     },
   };
 }
@@ -133,7 +183,7 @@ function resetUI() {
   $('prof-location').value = '';
   $('prof-website').value = '';
   $('bio-len').textContent = '0';
-  
+
   // Reset tabs
   showTab('overview');
 }
@@ -197,7 +247,7 @@ async function loadProfile() {
     $('prof-location').value = p.location || '';
     $('prof-website').value = p.website || '';
     $('bio-len').textContent = (p.bio || '').length;
-  } catch (e) {/* silent */}
+  } catch (e) {/* silent */ }
 }
 
 // ─── AUTH FORMS ───────────────────────────────────────────────────────────────
@@ -205,7 +255,7 @@ async function loadProfile() {
 $('btn-login').addEventListener('click', async () => {
   const username = $('login-username').value.trim();
   const password = $('login-password').value;
-  if (!username || !password) return toast('Enter username and password', 'error');
+  if (!username || !password) return reportError('Enter username and password');
 
   $('btn-login').disabled = true;
   try {
@@ -226,7 +276,7 @@ $('btn-login').addEventListener('click', async () => {
 
 $('btn-2fa-verify').addEventListener('click', async () => {
   const token = $('totp-code').value.trim();
-  if (!token) return toast('Enter your 2FA code', 'error');
+  if (!token) return reportError('Enter your 2FA code');
 
   try {
     await api('/auth/login/2fa', { method: 'POST', body: { token } });
@@ -234,7 +284,7 @@ $('btn-2fa-verify').addEventListener('click', async () => {
     await refreshStatus();
     showDashboard();
   } catch (e) {
-    toast(e.message, 'error');
+    reportError(e);
   }
 });
 
@@ -242,7 +292,7 @@ $('btn-register').addEventListener('click', async () => {
   const username = $('reg-username').value.trim();
   const email = $('reg-email').value.trim();
   const password = $('reg-password').value;
-  if (!username || !email || !password) return toast('All fields required', 'error');
+  if (!username || !email || !password) return reportError('All fields required');
 
   $('btn-register').disabled = true;
   try {
@@ -265,7 +315,7 @@ $('btn-logout').addEventListener('click', async () => {
     showView('view-auth');
     showAuthForm('form-login');
   } catch (e) {
-    toast('Logout failed', 'error');
+    reportError('Logout failed');
   }
 });
 
@@ -282,7 +332,7 @@ $('totp-code').addEventListener('keydown', e => { if (e.key === 'Enter') $('btn-
 // ─── PASSKEY LOGIN ────────────────────────────────────────────────────────────
 
 $('btn-passkey-login').addEventListener('click', async () => {
-  if (!window.PublicKeyCredential) return toast('Passkeys not supported in this browser', 'error');
+  if (!window.PublicKeyCredential) return reportError('Passkeys not supported in this browser');
 
   try {
     const username = $('login-username').value.trim() || undefined;
@@ -291,8 +341,10 @@ $('btn-passkey-login').addEventListener('click', async () => {
       body: { username },
     });
 
+    console.debug('[passkey] Auth options:', opts);
     const prepared = preparePublicKeyCredentialRequestOptions(opts);
     const cred = await navigator.credentials.get({ publicKey: prepared });
+    console.debug('[passkey] Auth credential:', cred);
     const serialized = serializeAuthenticationCredential(cred);
 
     const result = await api('/passkeys/authenticate/verify', {
@@ -306,7 +358,7 @@ $('btn-passkey-login').addEventListener('click', async () => {
     toast('Signed in with passkey!');
   } catch (e) {
     if (e.name === 'NotAllowedError') return; // User cancelled
-    toast(e.message || 'Passkey login failed', 'error');
+    reportError(e, { flow: 'passkey_login' });
   }
 });
 
@@ -342,7 +394,7 @@ $('btn-save-profile').addEventListener('click', async () => {
     });
     toast('Profile saved!');
   } catch (e) {
-    toast(e.message, 'error');
+    reportError(e);
   }
 });
 
@@ -385,14 +437,14 @@ $('btn-setup-2fa').addEventListener('click', async () => {
       $('totp-action-btns').classList.add('hidden');
       $('totp-setup-area').classList.remove('hidden');
     } catch (e) {
-      toast(e.message, 'error');
+      reportError(e);
     }
   }
 });
 
 $('btn-confirm-2fa').addEventListener('click', async () => {
   const token = $('totp-confirm-code').value.trim();
-  if (!token) return toast('Enter your 2FA code to confirm', 'error');
+  if (!token) return reportError('Enter your 2FA code to confirm');
   try {
     await api('/auth/2fa/verify-setup', { method: 'POST', body: { token } });
     toast('2FA enabled!');
@@ -402,7 +454,7 @@ $('btn-confirm-2fa').addEventListener('click', async () => {
     state.has2FA = true;
     loadSecurityTab();
   } catch (e) {
-    toast(e.message, 'error');
+    reportError(e);
   }
 });
 
@@ -414,7 +466,7 @@ $('btn-cancel-2fa').addEventListener('click', () => {
 $('btn-confirm-disable-2fa').addEventListener('click', async () => {
   const password = $('disable-2fa-password').value;
   const token = $('disable-2fa-code').value.trim();
-  if (!password) return toast('Password required', 'error');
+  if (!password) return reportError('Password required');
   try {
     await api('/auth/2fa/disable', { method: 'POST', body: { password, token } });
     toast('2FA disabled');
@@ -424,7 +476,7 @@ $('btn-confirm-disable-2fa').addEventListener('click', async () => {
     state.has2FA = false;
     loadSecurityTab();
   } catch (e) {
-    toast(e.message, 'error');
+    reportError(e);
   }
 });
 
@@ -437,9 +489,32 @@ $('btn-cancel-disable-2fa').addEventListener('click', () => {
 
 async function loadPasskeys() {
   const list = $('passkeys-list');
+  const noticeEl = $('passkey-sync-notice');
   list.innerHTML = '<div class="empty-state">Loading…</div>';
+  
+  // Show compatibility notice if Signal API is missing (e.g. Safari)
+  if (noticeEl) {
+    if (!window.PublicKeyCredential || !PublicKeyCredential.signalAllAcceptedCredentials) {
+      noticeEl.innerHTML = `
+        <div class="browser-notice">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+          <div>
+            <strong>Limited device sync.</strong> 
+            This browser does not support automatic passkey cleanup. Deleting a passkey here will not remove it from your device settings.
+          </div>
+        </div>
+      `;
+    } else {
+      noticeEl.innerHTML = '';
+    }
+  }
+
   try {
     const { passkeys } = await api('/passkeys/list');
+
+    // SYNC WITH DEVICE: Signal the browser which credentials are still valid
+    syncPasskeysWithDevice(passkeys.map(pk => pk.credential_id));
+
     if (!passkeys.length) {
       list.innerHTML = '<div class="empty-state">No passkeys registered yet.</div>';
       return;
@@ -465,17 +540,26 @@ async function loadPasskeys() {
 $('passkeys-list').addEventListener('click', async e => {
   const btn = e.target.closest('.action-delete-pk');
   if (!btn) return;
-  
+
   const id = btn.dataset.id;
   if (!confirm('Remove this passkey?')) return;
-  
+
   try {
-    await api('/passkeys/' + id, { method: 'DELETE' });
-    toast('Passkey removed');
+    const result = await api('/passkeys/' + id, { method: 'DELETE' });
+    toast('Passkey removed from server');
+    
+    // SYNC WITH DEVICE: Immediately tell the browser this passkey is gone
+    if (result.remainingCredentialIds) {
+      const syncStatus = await syncPasskeysWithDevice(result.remainingCredentialIds);
+      if (syncStatus && !syncStatus.supported) {
+        toast('Manual cleanup needed: To remove it from your device, visit your System Settings.', 'warning');
+      }
+    }
+
     loadPasskeys();
     refreshStatus();
   } catch (err) {
-    toast(err.message, 'error');
+    reportError(err);
   }
 });
 
@@ -493,10 +577,14 @@ $('btn-confirm-add-passkey').addEventListener('click', async () => {
   const name = $('new-passkey-name').value.trim();
 
   $('btn-confirm-add-passkey').disabled = true;
+  let excludeCount = 0;
   try {
     const opts = await api('/passkeys/register/options', { method: 'POST' });
+    excludeCount = opts.excludeCredentials?.length || 0;
+    console.debug('[passkey] Registration options:', opts);
     const prepared = preparePublicKeyCredentialCreationOptions(opts);
     const cred = await navigator.credentials.create({ publicKey: prepared });
+    console.debug('[passkey] Registration credential:', cred);
     const serialized = serializeRegistrationCredential(cred);
 
     await api('/passkeys/register/verify', {
@@ -509,8 +597,20 @@ $('btn-confirm-add-passkey').addEventListener('click', async () => {
     loadPasskeys();
     refreshStatus();
   } catch (e) {
-    if (e.name === 'NotAllowedError') { toast('Cancelled', 'warning'); }
-    else toast(e.message || 'Passkey registration failed', 'error');
+    const msg = (e.message || '').toLowerCase();
+    if (e.name === 'NotAllowedError') { 
+      toast('Cancelled', 'warning'); 
+    } else if (e.name === 'InvalidStateError') {
+      if (msg.includes('exclude') || msg.includes('already') || excludeCount > 0) {
+        reportError('This device is already registered as a passkey for your account.');
+      } else if (msg.includes('pending')) {
+        reportError('A registration request is already in progress.');
+      } else {
+        reportError('The authenticator is in an invalid state. Please try again.');
+      }
+    } else {
+      reportError(e);
+    }
   } finally {
     $('btn-confirm-add-passkey').disabled = false;
   }
@@ -546,16 +646,16 @@ async function loadSessions() {
 $('sessions-list').addEventListener('click', async e => {
   const btn = e.target.closest('.action-revoke-session');
   if (!btn) return;
-  
+
   const id = btn.dataset.id;
   if (!confirm('Revoke this session?')) return;
-  
+
   try {
     await api('/user/sessions/' + id, { method: 'DELETE' });
     toast('Session revoked');
     loadSessions();
   } catch (err) {
-    toast(err.message, 'error');
+    reportError(err);
   }
 });
 
@@ -659,7 +759,7 @@ document.querySelectorAll('.action-card').forEach(card => {
         state.freshAuth = { active: false };
         setupFreshAuthBanner();
       } else {
-        toast(e.message, 'error');
+        reportError(e);
       }
     }
   });
@@ -671,7 +771,7 @@ $('btn-cancel-email-change').addEventListener('click', () => {
 
 $('btn-confirm-email-change').addEventListener('click', async () => {
   const newEmail = $('new-email-input').value.trim();
-  if (!newEmail) return toast('Enter a new email', 'error');
+  if (!newEmail) return reportError('Enter a new email');
   try {
     const result = await api('/user/sensitive-action', {
       method: 'POST',
@@ -682,7 +782,7 @@ $('btn-confirm-email-change').addEventListener('click', async () => {
     $('action-result-pre').textContent = JSON.stringify(result.result, null, 2);
     toast('Email change initiated');
   } catch (e) {
-    toast(e.message, 'error');
+    reportError(e);
   }
 });
 
@@ -707,7 +807,7 @@ async function refreshStatus() {
 }
 
 function escHtml(str) {
-  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ─── BOOT ─────────────────────────────────────────────────────────────────────

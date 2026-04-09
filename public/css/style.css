@@ -473,6 +473,23 @@ textarea { resize: vertical; min-height: 80px; }
   padding: 2rem; border: 1px dashed var(--border); border-radius: var(--radius);
 }
 
+/* ─── NOTICES ────────────────────────────────────────────────────────── */
+.browser-notice {
+  background: rgba(96, 165, 250, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.2);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1.25rem;
+  font-size: 0.85rem;
+  color: var(--text-2);
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  line-height: 1.4;
+}
+.browser-notice strong { color: var(--blue); }
+.browser-notice svg { flex-shrink: 0; margin-top: 1px; }
+
 /* ─── RESPONSIVE ─────────────────────────────────────────────────────── */
 @media (max-width: 720px) {
   .auth-split { grid-template-columns: 1fr; }

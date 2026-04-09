@@ -83,11 +83,24 @@ export function initAuthDb() {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS system_logs (
+      id TEXT PRIMARY KEY,
+      level TEXT NOT NULL,
+      source TEXT NOT NULL,
+      message TEXT NOT NULL,
+      stack TEXT,
+      context TEXT,
+      user_id TEXT,
+      timestamp INTEGER NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys(user_id);
     CREATE INDEX IF NOT EXISTS idx_challenges_expires ON webauthn_challenges(expires_at);
     CREATE INDEX IF NOT EXISTS idx_fresh_auth_expires ON fresh_auth_tokens(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
+    CREATE INDEX IF NOT EXISTS idx_logs_level ON system_logs(level);
   `);
 }
 

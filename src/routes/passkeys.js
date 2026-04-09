@@ -256,7 +256,7 @@ router.post('/authenticate/verify', async (req, res) => {
 
 router.get('/list', requireAuth, (req, res) => {
   const passkeys = authDb.prepare(`
-    SELECT id, name, device_type, backed_up, created_at, last_used
+    SELECT id, name, device_type, backed_up, created_at, last_used, credential_id
     FROM passkeys WHERE user_id = ?
     ORDER BY created_at DESC
   `).all(req.userId);
@@ -282,13 +282,23 @@ router.delete('/:id', requireAuth, (req, res) => {
   const { id } = req.params;
 
   const passkey = authDb.prepare(
-    'SELECT id FROM passkeys WHERE id = ? AND user_id = ?'
+    'SELECT id, credential_id FROM passkeys WHERE id = ? AND user_id = ?'
   ).get(id, req.userId);
 
   if (!passkey) return res.status(404).json({ error: 'Passkey not found' });
 
   authDb.prepare('DELETE FROM passkeys WHERE id = ?').run(id);
-  res.json({ success: true });
+
+  // Get remaining credential IDs for the Signal API (helps browser cleanup)
+  const remaining = authDb.prepare(
+    'SELECT credential_id FROM passkeys WHERE user_id = ?'
+  ).all(req.userId);
+
+  res.json({ 
+    success: true, 
+    deletedCredentialId: passkey.credential_id,
+    remainingCredentialIds: remaining.map(r => r.credential_id)
+  });
 });
 
 export default router;

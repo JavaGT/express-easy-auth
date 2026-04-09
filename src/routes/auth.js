@@ -246,4 +246,25 @@ router.delete('/totp', requireFreshAuth, (req, res) => {
   res.json({ message: '2FA disabled' });
 });
 
+router.post('/report-error', (req, res) => {
+  const { level, message, stack, context } = req.body;
+  const now = Date.now();
+  
+  authDb.prepare(`
+    INSERT INTO system_logs (id, level, source, message, stack, context, user_id, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    randomUUID(),
+    level || 'error',
+    'client',
+    message || 'No message provided',
+    stack || null,
+    context ? JSON.stringify(context) : null,
+    req.session?.userId || null,
+    now
+  );
+
+  res.json({ success: true });
+});
+
 export default router;
