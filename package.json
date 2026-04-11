@@ -1,5 +1,5 @@
 {
-  "name": "express-easy-auth",
+  "name": "@javagt/express-easy-auth",
   "version": "1.0.0",
   "description": "",
   "type": "module",
@@ -16,6 +16,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.0",
     "bcrypt": "^6.0.0",
