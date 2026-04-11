@@ -1,81 +1,42 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
 import { randomUUID, randomBytes } from 'crypto';
-import { generateSync, verifySync, generateSecret } from 'otplib';
+import { verifySync, generateSecret } from 'otplib';
 import QRCode from 'qrcode';
+import { 
+  generateRegistrationOptions, 
+  verifyRegistrationResponse, 
+  generateAuthenticationOptions, 
+  verifyAuthenticationResponse 
+} from '@simplewebauthn/server';
 import { authDb, getAppSettings } from '../db/init.js';
 import { requireAuth, requireFreshAuth } from '../middleware/auth.js';
+import { generateRecoveryCodes, generateResetToken, getAuthResponse } from '../utils/authHelpers.js';
 
 const router = Router();
+
 const SALT_ROUNDS = 12;
 
-console.log('[auth] Initializing Auth Router v2 (Redirect Support)');
+// ─── HELPER ──────────────────────────────────────────────────────────────────
 
-// Middleware to ensure req.body is always an object
-router.use((req, res, next) => {
-  // Only check for req.body on methods that typically have a body
-  const methodsWithBody = ['POST', 'PUT', 'PATCH', 'DELETE'];
-  if (methodsWithBody.includes(req.method) && !req.body) {
-    console.debug(`[auth] req.body was undefined for ${req.method} ${req.url}`);
-    req.body = {};
-  }
-  next();
-});
-
-function getAuthResponse(req, res, { status, data, redirect }) {
-  const isHtml = req.headers.accept?.includes('text/html');
-  if (isHtml) {
-    if (status >= 400) {
-      const origin = `${req.protocol}://${req.get('host')}`;
-      const url = new URL(req.headers.referer || '/', origin);
-      url.searchParams.set('error', data.error || 'Authentication failed');
-      return res.redirect(url.toString());
-    }
-    return res.redirect(redirect || '/');
-  }
-  return res.status(status).json(data);
+function getRpConfig(req) {
+  const config = req.app.get('config');
+  if (!config) throw new Error('Server configuration missing');
+  return {
+    rpName: config.rpName || 'Auth Server',
+    rpID: config.rpID,
+    origin: config.origin,
+  };
 }
 
-/**
- * Generate a set of secure, readable recovery codes.
- * Returns { plain: string[], hashed: string[] }
- */
-async function generateRecoveryCodes(count = 10) {
-  const codes = [];
-  const hashes = [];
-  
-  for (let i = 0; i < count; i++) {
-    // Generate 8 random bytes -> 16 hex chars -> XXXX-XXXX-XXXX format
-    const code = randomBytes(6).toString('hex').toUpperCase().match(/.{4}/g).join('-');
-    codes.push(code);
-    hashes.push(await bcrypt.hash(code, 10)); // Use lower rounds for recovery codes to speed up batch setup
-  }
-  
-  return { plain: codes, hashed: hashes };
-}
-
-/**
- * Generate a secure alphanumeric reset token.
- */
-function generateResetToken(length = 12) {
-  const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Readable alphanumeric
-  let token = '';
-  const bytes = randomBytes(length);
-  for (let i = 0; i < length; i++) {
-    token += charset[bytes[i] % charset.length];
-  }
-  return token;
-}
-
-
-// ─── Register ────────────────────────────────────────────────────────────────
+// ─── AUTH CORE ───────────────────────────────────────────────────────────────
 
 router.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
   if (!username || !email || !password) {
-    return getAuthResponse(req, res, { 
-      status: 400, 
-      data: { error: 'username, email, and password are required' } 
+    return getAuthResponse(req, res, {
+      status: 400,
+      data: { error: 'username, email, and password are required' }
     });
   }
   const settings = getAppSettings();
@@ -89,11 +50,11 @@ router.post('/register', async (req, res) => {
   }
 
   const db = authDb;
-  const existing = db.prepare('SELECT id FROM users WHERE username=? OR email=?').get(username, email);
+  const existing = db.prepare('SELECT id FROM users WHERE username=? OR email=?').get(username || null, email || null);
   if (existing) {
-    return getAuthResponse(req, res, { 
-      status: 409, 
-      data: { error: 'Username or email already taken' } 
+    return getAuthResponse(req, res, {
+      status: 409,
+      data: { error: 'Username or email already taken' }
     });
   }
 
@@ -103,29 +64,23 @@ router.post('/register', async (req, res) => {
   const mfaRequired = settings.auth_force_mfa_new_users === 'true' ? 1 : 0;
 
   db.prepare('INSERT INTO users (id, username, email, password_hash, mfa_required, created_at, updated_at) VALUES (?,?,?,?,?,?,?)')
-    .run(userId, username, email, passwordHash, mfaRequired, now, now);
+    .run(userId, username || null, email || null, passwordHash, mfaRequired, now, now);
 
-  req.session.userId = userId;
-  req.session.username = username;
-  req.session.lastAuthedAt = now;
-
-  // Set session duration
-  const days = parseInt(settings.session_duration_days || '7', 10);
-  req.session.cookie.maxAge = days * 24 * 60 * 60 * 1000;
+  const autologin = settings.register_autologin === 'true';
+  if (autologin) {
+    req.session.userId = userId;
+    req.session.username = username;
+    req.session.lastAuthedAt = now;
+    const days = parseInt(settings.session_duration_days || '7', 10);
+    req.session.cookie.maxAge = days * 24 * 60 * 60 * 1000;
+  }
 
   return getAuthResponse(req, res, {
     status: 201,
-    data: { 
-      userId, 
-      username, 
-      message: 'Registered successfully',
-      user: { id: userId, username, email }
-    },
+    data: { userId, username, message: 'Registered successfully', user: { id: userId, username, email } },
     redirect: '/'
   });
 });
-
-// ─── Login Step 1: password ───────────────────────────────────────────────────
 
 router.post('/login', async (req, res) => {
   const { username, password } = req.body || {};
@@ -138,17 +93,16 @@ router.post('/login', async (req, res) => {
 
   const db = authDb;
   const settings = getAppSettings();
-  const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username, username);
-  
+  const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username || null, username || null);
+
   if (!user) {
-    await bcrypt.hash('dummy', SALT_ROUNDS); // timing attack mitigation
+    await bcrypt.hash('dummy', SALT_ROUNDS);
     return getAuthResponse(req, res, {
       status: 401,
       data: { error: 'Invalid credentials' }
     });
   }
 
-  // Check lockout
   const now = Date.now();
   if (user.locked_until > now) {
     const minsLeft = Math.ceil((user.locked_until - now) / 60000);
@@ -162,7 +116,6 @@ router.post('/login', async (req, res) => {
   if (!valid) {
     const failed = user.failed_attempts + 1;
     let lockedUntil = 0;
-    // Check lockout policy
     const maxAttempts = parseInt(settings.lockout_max_attempts || '5', 10);
     const lockoutMins = parseInt(settings.lockout_duration_mins || '15', 10);
 
@@ -179,27 +132,30 @@ router.post('/login', async (req, res) => {
     });
   }
 
-  // Success: Reset failures
   db.prepare('UPDATE users SET failed_attempts=0, locked_until=0 WHERE id=?').run(user.id);
 
-  // Set session duration
   const days = parseInt(settings.session_duration_days || '7', 10);
   req.session.cookie.maxAge = days * 24 * 60 * 60 * 1000;
 
   if (user.totp_enabled) {
-    // Partial session: awaiting 2FA
-    req.session.pendingUserId = user.id;
-    req.session.pendingUsername = user.username;
-    
-    // For HTML requests, we should redirect to a 2FA entry view
-    // But since the SPA handles views via state, we return JSON if we can
-    // Or redirect to root where the SPA will see the pending session.
-    // In this specific demo, the SPA handles the requires2FA: true.
-    return getAuthResponse(req, res, {
-      status: 200,
-      data: { requires2FA: true },
-      redirect: '/?requires2FA=true'
-    });
+    const { totp } = req.body;
+    if (!totp) {
+      req.session.pendingUserId = user.id;
+      req.session.pendingUsername = user.username;
+      return getAuthResponse(req, res, {
+        status: 401,
+        data: { requires2FA: true, error: 'Two-factor authentication required', code: '2FA_REQUIRED' },
+        redirect: '/?requires2FA=true'
+      });
+    }
+
+    const valid2FA = verifySync({ token: totp, secret: user.totp_secret, type: 'totp' });
+    if (!valid2FA?.valid) {
+      return getAuthResponse(req, res, {
+        status: 401,
+        data: { error: 'Invalid 2FA code' }
+      });
+    }
   }
 
   req.session.userId = user.id;
@@ -208,42 +164,26 @@ router.post('/login', async (req, res) => {
 
   return getAuthResponse(req, res, {
     status: 200,
-    data: { 
-      userId: user.id, 
-      username: user.username,
-      user: { id: user.id, username: user.username, email: user.email }
-    },
+    data: { userId: user.id, username: user.username, user: { id: user.id, username: user.username, email: user.email } },
     redirect: '/'
   });
 });
 
-// ─── Login Step 3: Recovery Code ──────────────────────────────────────────────
-
 router.post('/login/recovery', async (req, res) => {
   let { username, code } = req.body;
-  
-  // Support recovery during pending 2FA login
   if (!username) username = req.session.pendingUsername;
-  
+
   if (!username || !code) {
-    return getAuthResponse(req, res, { 
-      status: 400, 
-      data: { error: 'Username and recovery code are required' } 
-    });
+    return getAuthResponse(req, res, { status: 400, data: { error: 'Username and recovery code are required' } });
   }
 
   const db = authDb;
-  const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username, username);
+  const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username || null, username || null);
   if (!user) {
-    return getAuthResponse(req, res, { 
-      status: 401, 
-      data: { error: 'Invalid recovery attempt' } 
-    });
+    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery attempt' } });
   }
 
-  // Find all unused recovery codes for this user
   const codes = db.prepare('SELECT * FROM recovery_codes WHERE user_id=? AND used=0').all(user.id);
-  
   let matchedCodeId = null;
   for (const rc of codes) {
     if (await bcrypt.compare(code, rc.code_hash)) {
@@ -253,166 +193,19 @@ router.post('/login/recovery', async (req, res) => {
   }
 
   if (!matchedCodeId) {
-    return getAuthResponse(req, res, { 
-      status: 401, 
-      data: { error: 'Invalid recovery code' } 
-    });
+    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery code' } });
   }
 
-  // Mark code as used
   db.prepare('UPDATE recovery_codes SET used=1 WHERE id=?').run(matchedCodeId);
-
-  // Complete login
   delete req.session.pendingUserId;
   delete req.session.pendingUsername;
   req.session.userId = user.id;
   req.session.username = user.username;
   req.session.lastAuthedAt = Date.now();
-  req.session.isRecovered = true; // Mark session for mandatory password reset
+  req.session.isRecovered = true;
 
-  return getAuthResponse(req, res, {
-    status: 200,
-    data: { success: true, message: 'Account recovered' },
-    redirect: '/'
-  });
+  return getAuthResponse(req, res, { status: 200, data: { success: true }, redirect: '/' });
 });
-
-// ─── Password Reset (Developer Flow) ──────────────────────────────────────────
-
-/**
- * Developer-facing endpoint to request a reset token.
- * Typically called from the consumer app's backend.
- */
-router.post('/password-reset/request', async (req, res) => {
-  const { username, email } = req.body;
-  if (!username && !email) {
-    return res.status(400).json({ error: 'Username or email required' });
-  }
-
-  const db = authDb;
-  const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username, email);
-  
-  if (!user) {
-    // For security, don't reveal if user exists in a public-facing way, 
-    // but since this is a dev-facing API, we can be more explicit or follow generic 200.
-    // We'll return 404 here as it's a developer tool.
-    return res.status(404).json({ error: 'User not found' });
-  }
-
-  const token = generateResetToken();
-  const hash = await bcrypt.hash(token, 10);
-  const settings = getAppSettings();
-  const expiryMins = parseInt(settings.password_reset_expiry_mins || '30', 10);
-  const expiresAt = Date.now() + (expiryMins * 60 * 1000);
-
-  db.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .run(hash, user.id, expiresAt);
-
-  res.json({
-    success: true,
-    token, // Plain token returned to developer
-    expiresAt,
-    user: { id: user.id, username: user.username, email: user.email }
-  });
-});
-
-/**
- * Public-facing endpoint for the user to reset their password using the token.
- */
-router.post('/password-reset/reset', async (req, res) => {
-  const { token, newPassword } = req.body;
-  
-  if (!token || !newPassword) {
-    return res.status(400).json({ error: 'Token and new password required' });
-  }
-
-  const db = authDb;
-  const settings = getAppSettings();
-  const minLen = parseInt(settings.min_password_length || '8', 10);
-  
-  if (newPassword.length < minLen) {
-    return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
-  }
-
-  // Find valid tokens
-  const now = Date.now();
-  const tokens = db.prepare('SELECT * FROM password_reset_tokens WHERE used=0 AND expires_at > ?')
-    .all(now);
-
-  let matchedToken = null;
-  for (const t of tokens) {
-    if (await bcrypt.compare(token, t.token_hash)) {
-      matchedToken = t;
-      break;
-    }
-  }
-
-  if (!matchedToken) {
-    return res.status(401).json({ error: 'Invalid or expired reset token' });
-  }
-
-  // Duplicate declaration removed. Password length check already performed above.
-
-  // Update password
-  const newHash = await bcrypt.hash(newPassword, 12);
-  db.prepare('UPDATE users SET password_hash=?, updated_at=? WHERE id=?')
-    .run(newHash, Date.now(), matchedToken.user_id);
-
-  // Mark token as used
-  db.prepare('UPDATE password_reset_tokens SET used=1 WHERE token_hash=?')
-    .run(matchedToken.token_hash);
-
-  res.json({ success: true, message: 'Password reset successfully' });
-});
-
-// ─── Login Step 2: 2FA (TOTP) ─────────────────────────────────────────────────
-
-router.post(['/login/2fa', '/login/totp'], (req, res) => {
-  const { code, token } = req.body; // app.js sends 'token', README says 'code'
-  const submittedToken = token || code;
-  const pendingId = req.session.pendingUserId;
-  if (!pendingId) {
-    return getAuthResponse(req, res, {
-      status: 400,
-      data: { error: 'No pending login' }
-    });
-  }
-
-  const db = authDb;
-  const user = db.prepare('SELECT * FROM users WHERE id=?').get(pendingId);
-  if (!user?.totp_secret) {
-    return getAuthResponse(req, res, {
-      status: 400,
-      data: { error: 'No TOTP configured' }
-    });
-  }
-
-  const valid = verifySync({ token: submittedToken, secret: user.totp_secret, type: 'totp' });
-  if (!valid?.valid) {
-    return getAuthResponse(req, res, {
-      status: 401,
-      data: { error: 'Invalid 2FA code' }
-    });
-  }
-
-  delete req.session.pendingUserId;
-  delete req.session.pendingUsername;
-  req.session.userId = user.id;
-  req.session.username = user.username;
-  req.session.lastAuthedAt = Date.now();
-
-  return getAuthResponse(req, res, {
-    status: 200,
-    data: { 
-      userId: user.id, 
-      username: user.username,
-      user: { id: user.id, username: user.username, email: user.email }
-    },
-    redirect: '/'
-  });
-});
-
-// ─── Logout ───────────────────────────────────────────────────────────────────
 
 router.post('/logout', (req, res) => {
   req.session.destroy(() => res.json({ message: 'Logged out' }));
@@ -423,43 +216,26 @@ router.get('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/?logged_out=1'));
 });
 
-// ─── Session status ───────────────────────────────────────────────────────────
-
 router.get('/status', (req, res) => {
   const userId = req.session.userId;
-  if (!userId) {
-    return res.json({ authenticated: false });
-  }
+  if (!userId) return res.json({ authenticated: false });
 
   const db = authDb;
-  const user = db.prepare('SELECT id, username, email, totp_enabled, mfa_required FROM users WHERE id=?')
-    .get(userId);
-
+  const user = db.prepare('SELECT id, username, email, totp_enabled, mfa_required FROM users WHERE id=?').get(userId);
   if (!user) {
     req.session.destroy();
     return res.json({ authenticated: false });
   }
 
-  const passkeyCount = db.prepare('SELECT COUNT(*) as count FROM passkeys WHERE user_id=?')
-    .get(userId).count;
-
+  const passkeyCount = db.prepare('SELECT COUNT(*) as count FROM passkeys WHERE user_id=?').get(userId).count;
   const settings = getAppSettings();
 
   res.json({
     authenticated: true,
-    user: { 
-      id: user.id, 
-      username: user.username, 
-      email: user.email,
-      mfaRequired: !!user.mfa_required
-    },
+    user: { id: user.id, username: user.username, email: user.email, mfaRequired: !!user.mfa_required },
     isRecovered: !!req.session.isRecovered,
     settings,
-    security: {
-      has2FA: !!user.totp_enabled,
-      passkeyCount,
-      loginMethod: req.session.loginMethod || 'password'
-    },
+    security: { has2FA: !!user.totp_enabled, passkeyCount, loginMethod: req.session.loginMethod || 'password' },
     freshAuth: {
       active: !!(req.session.lastAuthedAt && (Date.now() - req.session.lastAuthedAt < 5 * 60 * 1000)),
       expiresAt: (req.session.lastAuthedAt || 0) + 5 * 60 * 1000
@@ -468,13 +244,10 @@ router.get('/status', (req, res) => {
 });
 
 router.get('/me', requireAuth, (req, res) => {
-  const db = authDb;
-  const user = db.prepare('SELECT id, username, email, totp_enabled FROM users WHERE id=?')
-    .get(req.session.userId);
+  const user = authDb.prepare('SELECT id, username, email, totp_enabled FROM users WHERE id=?').get(req.session.userId);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const passkeys = db.prepare('SELECT id, friendly_name, device_type, created_at FROM passkeys WHERE user_id=?')
-    .all(req.session.userId);
+  const passkeys = authDb.prepare('SELECT id, friendly_name, device_type, created_at FROM passkeys WHERE user_id=?').all(req.session.userId);
 
   res.json({
     userId: user.id,
@@ -486,22 +259,19 @@ router.get('/me', requireAuth, (req, res) => {
   });
 });
 
-// ─── Fresh Auth (re-authenticate within session) ──────────────────────────────
+// ─── FRESH AUTH ──────────────────────────────────────────────────────────────
 
 router.post(['/fresh-auth', '/reauth'], requireAuth, async (req, res) => {
   const { password, totpCode, token } = req.body;
   const submittedToken = token || totpCode;
-  const db = authDb;
-  const user = db.prepare('SELECT * FROM users WHERE id=?').get(req.session.userId);
+  const user = authDb.prepare('SELECT * FROM users WHERE id=?').get(req.session.userId);
 
   if (password) {
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: 'Invalid password' });
 
-    if (user.totp_enabled && !totpCode) {
-      return res.json({ requires2FA: true });
-    }
-    if (user.totp_enabled && submittedToken) {
+    if (user.totp_enabled) {
+      if (!submittedToken) return res.json({ requires2FA: true });
       const ok = verifySync({ token: submittedToken, secret: user.totp_secret, type: 'totp' });
       if (!ok?.valid) return res.status(401).json({ error: 'Invalid TOTP code' });
     }
@@ -510,21 +280,14 @@ router.post(['/fresh-auth', '/reauth'], requireAuth, async (req, res) => {
   }
 
   req.session.lastAuthedAt = Date.now();
-  res.json({ 
-    message: 'Reauthenticated', 
-    lastAuthedAt: req.session.lastAuthedAt,
-    expiresAt: req.session.lastAuthedAt + 5 * 60 * 1000
-  });
+  res.json({ message: 'Reauthenticated', lastAuthedAt: req.session.lastAuthedAt, expiresAt: req.session.lastAuthedAt + 5 * 60 * 1000 });
 });
 
-// ─── TOTP Setup ───────────────────────────────────────────────────────────────
+// ─── 2FA (TOTP) ──────────────────────────────────────────────────────────────
 
-router.post(['/2fa/setup', '/totp/setup'], requireAuth, async (req, res) => {
-  const db = authDb;
-  const user = db.prepare('SELECT username, email FROM users WHERE id=?').get(req.session.userId);
+router.post('/2fa/setup', requireAuth, async (req, res) => {
+  const user = authDb.prepare('SELECT username, email FROM users WHERE id=?').get(req.session.userId);
   const secret = generateSecret();
-
-  // Store pending (not yet confirmed)
   req.session.pendingTotpSecret = secret;
 
   const otpauthUrl = `otpauth://totp/${encodeURIComponent('AuthServer')}:${encodeURIComponent(user.email)}?secret=${secret}&issuer=AuthServer`;
@@ -533,7 +296,7 @@ router.post(['/2fa/setup', '/totp/setup'], requireAuth, async (req, res) => {
   res.json({ secret, qrCode, otpauthUrl });
 });
 
-router.post(['/2fa/verify-setup', '/totp/confirm'], requireAuth, (req, res) => {
+router.post('/2fa/verify-setup', requireAuth, (req, res) => {
   const { code, token } = req.body;
   const submittedToken = token || code;
   const secret = req.session.pendingTotpSecret;
@@ -542,27 +305,16 @@ router.post(['/2fa/verify-setup', '/totp/confirm'], requireAuth, (req, res) => {
   const valid = verifySync({ token: submittedToken, secret, type: 'totp' });
   if (!valid?.valid) return res.status(401).json({ error: 'Invalid code' });
 
-  const db = authDb;
-  db.prepare('UPDATE users SET totp_secret=?, totp_enabled=1 WHERE id=?')
-    .run(secret, req.session.userId);
+  authDb.prepare('UPDATE users SET totp_secret=?, totp_enabled=1 WHERE id=?').run(secret, req.session.userId);
 
-  // Generate recovery codes
   generateRecoveryCodes(10).then(({ codes, hashes }) => {
     const now = Date.now();
-    const stmt = db.prepare(`
-      INSERT INTO recovery_codes (id, user_id, code_hash, created_at)
-      VALUES (?, ?, ?, ?)
-    `);
-    
+    const stmt = authDb.prepare('INSERT INTO recovery_codes (id, user_id, code_hash, created_at) VALUES (?, ?, ?, ?)');
     for (const hash of hashes) {
       stmt.run(randomUUID(), req.session.userId, hash, now);
     }
-    
     delete req.session.pendingTotpSecret;
-    res.json({ 
-      message: '2FA enabled',
-      recoveryCodes: codes
-    });
+    res.json({ message: '2FA enabled', recoveryCodes: codes });
   }).catch(err => {
     console.error('[auth] Failed to generate recovery codes:', err);
     res.json({ message: '2FA enabled (but recovery codes failed)', recoveryCodes: [] });
@@ -570,64 +322,237 @@ router.post(['/2fa/verify-setup', '/totp/confirm'], requireAuth, (req, res) => {
 });
 
 router.post('/2fa/disable', requireFreshAuth, (req, res) => {
-  const db = authDb;
-  db.prepare('UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE id=?')
-    .run(req.session.userId);
+  authDb.prepare('UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE id=?').run(req.session.userId);
   res.json({ message: '2FA disabled' });
 });
 
-router.delete('/totp', requireFreshAuth, (req, res) => {
-  const db = authDb;
-  db.prepare('UPDATE users SET totp_secret=NULL, totp_enabled=0 WHERE id=?')
-    .run(req.session.userId);
-  res.json({ message: '2FA disabled' });
+// ─── PASSKEYS ────────────────────────────────────────────────────────────────
+
+router.post('/passkeys/register/options', requireAuth, async (req, res) => {
+  const { rpName, rpID } = getRpConfig(req);
+  const user = authDb.prepare('SELECT * FROM users WHERE id = ?').get(req.userId);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const existingCredentials = authDb.prepare('SELECT credential_id, transports FROM passkeys WHERE user_id = ?').all(req.userId);
+  const excludeCredentials = existingCredentials.map(c => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : [] }));
+
+  const options = await generateRegistrationOptions({
+    rpName, rpID, userID: Buffer.from(user.id, 'utf-8'), userName: user.username, userDisplayName: user.username,
+    attestationType: 'none', excludeCredentials,
+    authenticatorSelection: { residentKey: 'preferred', userVerification: 'preferred' },
+  });
+
+  const now = Date.now();
+  authDb.prepare('INSERT INTO webauthn_challenges (id, user_id, challenge, type, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(randomUUID(), req.userId, options.challenge, 'registration', now, now + 5 * 60 * 1000);
+
+  res.json(options);
 });
 
-router.post('/change-password', requireAuth, async (req, res) => {
-  const { newPassword } = req.body;
-  const settings = getAppSettings();
-  const minLen = parseInt(settings.password_min_length || '8', 10);
-  if (!newPassword || newPassword.length < minLen) {
-    return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
-  }
+router.post('/passkeys/register/verify', requireAuth, async (req, res) => {
+  const { rpID, origin } = getRpConfig(req);
+  const { response, name } = req.body;
+  const challengeRow = authDb.prepare('SELECT * FROM webauthn_challenges WHERE user_id = ? AND type = \'registration\' AND expires_at > ? ORDER BY created_at DESC LIMIT 1')
+    .get(req.userId, Date.now());
 
-  // If not a recovered session, require fresh auth for security
-  if (!req.session.isRecovered) {
-    const freshToken = req.headers['x-fresh-auth-token'];
+  if (!challengeRow) return res.status(400).json({ error: 'No valid challenge found' });
+
+  try {
+    const verification = await verifyRegistrationResponse({ response, expectedChallenge: challengeRow.challenge, expectedOrigin: origin, expectedRPID: rpID });
+    if (!verification.verified || !verification.registrationInfo) return res.status(400).json({ error: 'Passkey registration failed' });
+
+    const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
     const now = Date.now();
-    const fresh = authDb.prepare('SELECT id FROM fresh_auth_tokens WHERE id=? AND user_id=? AND expires_at > ?')
-      .get(freshToken, req.session.userId, now);
-    
-    if (!fresh) {
-      return res.status(401).json({ 
-        error: 'Fresh authentication required to change password',
-        code: 'FRESH_AUTH_REQUIRED'
-      });
+    authDb.prepare(`
+      INSERT INTO passkeys (id, user_id, credential_id, public_key, counter, device_type, backed_up, transports, friendly_name, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(randomUUID(), req.userId, credential.id, Buffer.from(credential.publicKey).toString('base64'), credential.counter,
+      credentialDeviceType, credentialBackedUp ? 1 : 0, JSON.stringify(response.response?.transports || []),
+      name || `Passkey ${new Date().toLocaleDateString()}`, now);
+
+    authDb.prepare('DELETE FROM webauthn_challenges WHERE id = ?').run(challengeRow.id);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/passkeys/authenticate/options', async (req, res) => {
+  const { rpID } = getRpConfig(req);
+  const { username } = req.body;
+  let allowCredentials = [];
+  let userId = null;
+
+  if (username) {
+    const user = authDb.prepare('SELECT * FROM users WHERE username = ? OR email = ?').get(username.toLowerCase(), username.toLowerCase());
+    if (user) {
+      userId = user.id;
+      const creds = authDb.prepare('SELECT credential_id, transports FROM passkeys WHERE user_id = ?').all(user.id);
+      allowCredentials = creds.map(c => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : [] }));
     }
   }
 
-  // Duplicate declaration removed. Password length check already performed above.
+  const options = await generateAuthenticationOptions({ rpID, userVerification: 'preferred', allowCredentials });
+  const now = Date.now();
+  authDb.prepare('INSERT INTO webauthn_challenges (id, user_id, challenge, type, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(randomUUID(), userId, options.challenge, 'authentication', now, now + 5 * 60 * 1000);
+
+  req.session.passkeyChallenge = options.challenge;
+  res.json(options);
+});
+
+router.post('/passkeys/authenticate/verify', async (req, res) => {
+  const { rpID, origin } = getRpConfig(req);
+  const { response } = req.body;
+  const challenge = req.session.passkeyChallenge;
+  if (!challenge) return res.status(400).json({ error: 'No active passkey challenge' });
+
+  const challengeRow = authDb.prepare('SELECT * FROM webauthn_challenges WHERE challenge = ? AND type = \'authentication\' AND expires_at > ? ORDER BY created_at DESC LIMIT 1')
+    .get(challenge, Date.now());
+  if (!challengeRow) return res.status(400).json({ error: 'Challenge expired or not found' });
+
+  const passkey = authDb.prepare('SELECT * FROM passkeys WHERE credential_id = ?').get(response.id);
+  if (!passkey) return res.status(400).json({ error: 'Passkey not registered' });
+
+  try {
+    const verification = await verifyAuthenticationResponse({
+      response, expectedChallenge: challengeRow.challenge, expectedOrigin: origin, expectedRPID: rpID,
+      credential: { id: passkey.credential_id, publicKey: Buffer.from(passkey.public_key, 'base64'), counter: passkey.counter,
+      transports: passkey.transports ? JSON.parse(passkey.transports) : [] }
+    });
+
+    if (!verification.verified) return res.status(401).json({ error: 'Passkey verification failed' });
+
+    authDb.prepare('UPDATE passkeys SET counter = ?, last_used = ? WHERE id = ?').run(verification.authenticationInfo.newCounter, Date.now(), passkey.id);
+    authDb.prepare('DELETE FROM webauthn_challenges WHERE id = ?').run(challengeRow.id);
+    delete req.session.passkeyChallenge;
+
+    req.session.userId = passkey.user_id;
+    req.session.lastAuthedAt = Date.now();
+    req.session.loginMethod = 'passkey';
+    res.json({ success: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.get('/passkeys', requireAuth, (req, res) => {
+  const passkeys = authDb.prepare('SELECT id, friendly_name as name, device_type, created_at, last_used FROM passkeys WHERE user_id = ? ORDER BY created_at DESC').all(req.userId);
+  res.json({ passkeys });
+});
+
+router.delete('/passkeys/:id', requireAuth, (req, res) => {
+  const { id } = req.params;
+  const passkey = authDb.prepare('SELECT id FROM passkeys WHERE id = ? AND user_id = ?').get(id, req.userId);
+  if (!passkey) return res.status(404).json({ error: 'Passkey not found' });
+  authDb.prepare('DELETE FROM passkeys WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// ─── SESSIONS ────────────────────────────────────────────────────────────────
+
+router.get('/sessions', requireAuth, (req, res) => {
+  const sessions = authDb.prepare('SELECT id, created_at, expires_at, last_activity FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_activity DESC')
+    .all(req.userId, Math.floor(Date.now() / 1000));
+  res.json({ sessions: sessions.map(s => ({ ...s, isCurrent: s.id === req.sessionID })) });
+});
+
+router.delete('/sessions/:id', requireAuth, (req, res) => {
+  const { id } = req.params;
+  if (id === req.sessionID) return res.status(400).json({ error: 'Cannot revoke current session' });
+  const session = authDb.prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?').get(id, req.userId);
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+  authDb.prepare('DELETE FROM sessions WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// ─── API KEYS ────────────────────────────────────────────────────────────────
+
+router.get('/api-keys', requireAuth, (req, res) => {
+  const keys = authDb.prepare('SELECT id, name, permissions, created_at, last_used FROM api_keys WHERE user_id = ? ORDER BY created_at DESC').all(req.userId);
+  res.json({ keys: keys.map(k => ({ ...k, permissions: JSON.parse(k.permissions || '[]') })) });
+});
+
+router.post('/api-keys', requireAuth, async (req, res) => {
+  const { name, permissions } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name is required' });
+
+  const allowed = ['action:read', 'action:write'];
+  const validPermissions = (permissions || []).filter(p => allowed.includes(p));
+
+  const keyId = randomUUID().replace(/-/g, '').substring(0, 16);
+  const secret = randomBytes(24).toString('base64').replace(/[^a-zA-Z0-9]/g, '');
+  const rawKey = `sk_live_${keyId}_${secret}`;
+  const hash = await bcrypt.hash(secret, 10);
+
+  const now = Date.now();
+  authDb.prepare('INSERT INTO api_keys (id, user_id, key_hash, name, permissions, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(keyId, req.userId, hash, name || null, JSON.stringify(validPermissions), now);
+
+  res.status(201).json({ success: true, key: rawKey, metadata: { id: keyId, name, permissions: validPermissions, createdAt: now } });
+});
+
+router.delete('/api-keys/:id', requireAuth, (req, res) => {
+  const { id } = req.params;
+  const key = authDb.prepare('SELECT id FROM api_keys WHERE id = ? AND user_id = ?').get(id, req.userId);
+  if (!key) return res.status(404).json({ error: 'API Key not found' });
+  authDb.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
+  res.json({ success: true });
+});
+
+// ─── PASSWORD RESET ──────────────────────────────────────────────────────────
+
+router.post('/password-reset/request', async (req, res) => {
+  const { username, email } = req.body;
+  const user = authDb.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username || null, email || null);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  const token = generateResetToken();
+  const hash = await bcrypt.hash(token, 10);
+  const settings = getAppSettings();
+  const expiryMins = parseInt(settings.password_reset_expiry_mins || '30', 10);
+  const expiresAt = Date.now() + (expiryMins * 60 * 1000);
+
+  authDb.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(hash, user.id, expiresAt);
+
+  const config = req.app.get('config');
+  if (config?.origin) {
+    fetch(`${config.origin}/api/v1/test/mailbox`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'Email', subject: 'Password Reset', body: `Token: ${token}` })
+    }).catch(() => {});
+  }
+
+  res.json({ success: true, token, expiresAt });
+});
+
+router.post('/password-reset/reset', async (req, res) => {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) return res.status(400).json({ error: 'Missing data' });
+
+  const tokens = authDb.prepare('SELECT * FROM password_reset_tokens WHERE used=0 AND expires_at > ?').all(Date.now());
+  let matchedToken = null;
+  for (const t of tokens) {
+    if (await bcrypt.compare(token, t.token_hash)) { matchedToken = t; break; }
+  }
+
+  if (!matchedToken) return res.status(401).json({ error: 'Invalid or expired token' });
 
   const hash = await bcrypt.hash(newPassword, 12);
-  authDb.prepare('UPDATE users SET password_hash=?, updated_at=? WHERE id=?')
-    .run(hash, Date.now(), req.session.userId);
+  authDb.prepare('UPDATE users SET password_hash=?, updated_at=? WHERE id=?').run(hash, Date.now(), matchedToken.user_id);
+  authDb.prepare('UPDATE password_reset_tokens SET used=1 WHERE token_hash=?').run(matchedToken.token_hash);
 
-  // Clear recovery flag after successful reset
-  delete req.session.isRecovered;
-  
-  res.json({ success: true, message: 'Password updated successfully' });
+  res.json({ success: true });
 });
+
+// ─── SETTINGS ────────────────────────────────────────────────────────────────
 
 router.patch('/settings', requireAuth, (req, res) => {
   const updates = req.body;
-  const db = authDb;
-  
-  const stmt = db.prepare("UPDATE settings SET value=? WHERE key=?");
-  
+  const stmt = authDb.prepare("UPDATE settings SET value=? WHERE key=?");
   try {
-    for (const [key, value] of Object.entries(updates)) {
-      stmt.run(String(value), key);
-    }
+    for (const [key, value] of Object.entries(updates)) { stmt.run(String(value), key); }
     res.json({ success: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -636,22 +561,8 @@ router.patch('/settings', requireAuth, (req, res) => {
 
 router.post('/report-error', (req, res) => {
   const { level, message, stack, context } = req.body;
-  const now = Date.now();
-  
-  authDb.prepare(`
-    INSERT INTO system_logs (id, level, source, message, stack, context, user_id, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    randomUUID(),
-    level || 'error',
-    'client',
-    message || 'No message provided',
-    stack || null,
-    context ? JSON.stringify(context) : null,
-    req.session?.userId || null,
-    now
-  );
-
+  authDb.prepare('INSERT INTO system_logs (id, level, source, message, stack, context, user_id, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(randomUUID(), level || 'error', 'client', message || 'No message', stack || null, context ? JSON.stringify(context) : null, req.session?.userId || null, Date.now());
   res.json({ success: true });
 });
 

@@ -9,26 +9,21 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
 // 1. Import the library's main integration tools
-// - setupAuth: Initializes the databases and configures the RP (Relying Party)
-// - Routers: Standard Express routers for various auth features
-// - SQLiteSessionStore: A custom session store optimized for this library
-// - authErrorLogger: A global error handler that logs issues to the auth database
-import { 
-  setupAuth, 
-  authRouter, 
-  passkeysRouter, 
-  userRouter, 
+import {
+  setupAuth,
+  authRouter,
   SQLiteSessionStore,
   authErrorLogger,
   requireApiKey
 } from '../src/index.js';
+import { DatabaseSync } from 'node:sqlite';
+import profileRouter from './profileRouter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-
-const DOMAIN = process.env.DOMAIN || 'auth-test.javagrant.ac.nz';
+const DOMAIN = process.env.DOMAIN || 'localhost';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-this-in-production-please';
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -39,27 +34,44 @@ const IS_LOCALHOST = HOSTNAME.includes('localhost') || HOSTNAME.includes('127.0.
 const PROTOCOL = (IS_PROD || !IS_LOCALHOST) ? 'https' : 'http';
 const ORIGIN = `${PROTOCOL}://${HOSTNAME}${(!IS_PROD && IS_LOCALHOST && PORT !== 80 && PORT !== 443) ? `:${PORT}` : ''}`;
 
-// 2. Global Configuration
-// These settings are crucial for Passkeys/WebAuthn to function correctly.
-// RP (Relying Party) Info must match the domain where the app is hosted.
 const config = {
-  domain: HOSTNAME,               // The domain name (e.g., app.com)
-  port: PORT,                     // The port the server is listening on
-  protocol: PROTOCOL,             // http/https
-  origin: ORIGIN,                 // Full URL of the frontend (e.g., https://app.com)
-  rpName: 'Auth Server Demo',     // Human-readable name shown in Passkey prompts
-  rpID: HOSTNAME,                 // Must be the domain name
+  domain: HOSTNAME,
+  port: PORT,
+  protocol: PROTOCOL,
+  origin: ORIGIN,
+  rpName: 'Auth Server Demo',
+  rpID: HOSTNAME,
 };
 
 const app = express();
 
-// 3. Initialize Authentication Services
-// This creates the SQLite databases (auth.db, user.db) if they don't exist
-// and attaches the config to the 'app' object for the routers to use.
+// 2. Initialize Authentication Services
+const dataDir = path.join(__dirname, '../data');
 setupAuth(app, {
-  dataDir: path.join(__dirname, '../data'),
+  dataDir,
+  exposeErrors: !IS_PROD,
   config
 });
+
+// 2b. Initialize Application Database (External to Auth Server)
+const appDataDb = new DatabaseSync(path.join(dataDir, 'app_data.db'));
+appDataDb.exec(`
+  CREATE TABLE IF NOT EXISTS profiles (
+    user_id TEXT PRIMARY KEY,
+    display_name TEXT,
+    bio TEXT,
+    avatar_url TEXT,
+    location TEXT,
+    website TEXT,
+    preferences TEXT, -- JSON string for app settings
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+`);
+
+// Attach appDataDb to app for use in routers
+app.set('appDataDb', appDataDb);
+
 
 // ─── MIDDLEWARE ──────────────────────────────────────────────────────────────
 
@@ -84,16 +96,12 @@ app.use(cors({
   credentials: true,
 }));
 
-// 4. Core Express Middlewares
-app.use(express.json());             // Required to parse JSON bodies from AJAX/SPA
-app.use(express.urlencoded({ extended: true })); // Required to parse standard HTML form submissions
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser(SESSION_SECRET));
 
 // ─── SESSION ─────────────────────────────────────────────────────────────────
 
-// 5. Session Management
-// We use SQLiteSessionStore to keep session metadata (like last_activity)
-// in our own database, enabling easy session viewing/revocation.
 const sessionStore = new SQLiteSessionStore();
 
 app.use(session({
@@ -112,12 +120,9 @@ app.use(session({
 
 // ─── ROUTES ──────────────────────────────────────────────────────────────────
 
-// Mount the authentication library routers
-// 6. Library Routes
-// It's recommended to mount these under /api/ to separate them from public assets.
-app.use('/api/auth', authRouter);         // Register, Login, Logout, Status, 2FA
-app.use('/api/passkeys', passkeysRouter); // WebAuthn Registration & Authentication
-app.use('/api/user', userRouter);         // Profile & Session Management
+// 3. Mount Library & Application Routes
+app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/profile', profileRouter);
 
 // Sample Public API protected by API Keys
 app.get('/api/public/data', requireApiKey, (req, res) => {
@@ -147,13 +152,34 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', domain: DOMAIN, timestamp: new Date().toISOString() });
 });
 
+// ─── DEMO MAILBOX (TEST ENDPOINTS) ──────────────────────────────────────────
+const mailboxMessages = [];
+
+app.get('/api/v1/test/mailbox', (req, res) => {
+  res.json({ messages: mailboxMessages });
+});
+
+app.post('/api/v1/test/mailbox', (req, res) => {
+  const { type, subject, body } = req.body;
+  const msg = {
+    id: Math.random().toString(36).substring(2, 9),
+    type: type || 'System',
+    subject: subject || 'No Subject',
+    body: body || '',
+    timestamp: Date.now()
+  };
+  mailboxMessages.unshift(msg);
+  if (mailboxMessages.length > 50) mailboxMessages.pop();
+  res.status(201).json(msg);
+});
+
+app.delete('/api/v1/test/mailbox', (req, res) => {
+  mailboxMessages.length = 0;
+  res.status(204).send();
+});
+
 // Serve frontend from demo directory
 app.use(express.static(path.join(__dirname, './public')));
-
-// SPA fallback — serve index.html for all non-API routes
-app.get(/^(?!\/api).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, './public/index.html'));
-});
 
 // ─── ERROR HANDLER ───────────────────────────────────────────────────────────
 

@@ -4,6 +4,10 @@
   "description": "",
   "type": "module",
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./client": "./src/client.js"
+  },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node demo/server.js",
@@ -13,7 +17,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.0",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
@@ -24,7 +27,6 @@
     "helmet": "^8.1.0",
     "otplib": "^13.4.0",
     "qrcode": "^1.5.4",
-    "speakeasy": "^2.0.0",
     "uuid": "^13.0.0"
   }
 }

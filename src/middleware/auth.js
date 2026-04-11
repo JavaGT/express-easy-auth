@@ -78,39 +78,34 @@ export async function requireApiKey(req, res, next) {
 }
 
 /**
- * Global error handler that logs to the authentication database
+ * Global error handler that logs via the configured logger
  */
 export function authErrorLogger(err, req, res, next) {
-    console.error('[error]', err);
+    const logger = req.app.get('logger');
+    const config = req.app.get('config') || {};
+    const exposeErrors = config.exposeErrors;
 
-    const isProd = process.env.NODE_ENV === 'production';
-
-    // LOG TO DATABASE
-    try {
-        if (authDb) {
-            authDb.prepare(`
-                INSERT INTO system_logs (id, level, source, message, stack, context, user_id, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-                randomUUID(),
-                'error',
-                'server',
-                err.message || String(err),
-                err.stack || null,
-                JSON.stringify({
-                    url: req.url,
-                    method: req.method,
-                    ip: req.ip,
-                    userAgent: req.get('user-agent')
-                }),
-                req.session?.userId || null,
-                Date.now()
-            );
-        }
-    } catch (logErr) {
-        console.error('[critical] Failed to write to system_logs:', logErr);
+    if (logger) {
+        logger.error(err.message || String(err), {
+            err,
+            source: 'server',
+            userId: req.session?.userId || null,
+            context: {
+                url: req.url,
+                method: req.method,
+                ip: req.ip,
+                userAgent: req.get('user-agent'),
+                requestId: req.get('x-request-id') // If available
+            }
+        });
+    } else {
+        console.error('[auth-server] Logger not found, falling back to console:', err);
     }
 
     if (res.headersSent) return next(err);
-    res.status(500).json({ error: isProd ? 'Internal server error' : err.message });
+    
+    res.status(500).json({ 
+        error: exposeErrors ? (err.message || 'Internal server error') : 'Internal server error',
+        ...(exposeErrors && { stack: err.stack })
+    });
 }

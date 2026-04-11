@@ -6,14 +6,14 @@ let authDb;
 let userDb;
 
 export function initAuthDb(dataDir) {
-    if (!authDb) {
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-        authDb = new DatabaseSync(path.join(dataDir, 'auth.db'));
+  if (!authDb) {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
     }
+    authDb = new DatabaseSync(path.join(dataDir, 'auth.db'));
+  }
 
-    authDb.exec(`
+  authDb.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       username TEXT UNIQUE NOT NULL,
@@ -55,7 +55,7 @@ export function initAuthDb(dataDir) {
       device_type TEXT,
       backed_up INTEGER NOT NULL DEFAULT 0,
       transports TEXT,
-      name TEXT,
+      friendly_name TEXT,
       created_at INTEGER NOT NULL,
       last_used INTEGER,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -157,38 +157,40 @@ export function initAuthDb(dataDir) {
     'admin_email': 'site_admin_emails'
   };
 
-  for (const [oldKey, newKey] of Object.entries(migrateMap)) {
+    for (const [oldKey, newKey] of Object.entries(migrateMap)) {
+      try {
+        authDb.prepare(`
+          UPDATE settings SET key = ? 
+          WHERE key = ? AND NOT EXISTS (SELECT 1 FROM settings WHERE key = ?)
+        `).run(newKey, oldKey, newKey);
+      } catch (e) {
+        // Ignore migration errors (e.g. key already migrated)
+      }
+    }
+  
+    // Migration: Rename 'name' to 'friendly_name' in passkeys table if it exists
     try {
-      authDb.prepare(`
-        UPDATE settings SET key = ? 
-        WHERE key = ? AND NOT EXISTS (SELECT 1 FROM settings WHERE key = ?)
-      `).run(newKey, oldKey, newKey);
+        const columns = authDb.prepare("PRAGMA table_info(passkeys)").all();
+        const hasName = columns.some(c => c.name === 'name');
+        const hasFriendlyName = columns.some(c => c.name === 'friendly_name');
+        
+        if (hasName && !hasFriendlyName) {
+            authDb.exec("ALTER TABLE passkeys RENAME COLUMN name TO friendly_name");
+        }
     } catch (e) {
-      // Ignore migration errors (e.g. key already migrated)
+        // Ignore table_info errors or if table doesn't exist yet
     }
   }
-}
 
 export function initUserDb(dataDir) {
-    if (!userDb) {
-        if (!fs.existsSync(dataDir)) {
-            fs.mkdirSync(dataDir, { recursive: true });
-        }
-        userDb = new DatabaseSync(path.join(dataDir, 'users.db'));
+  if (!userDb) {
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
     }
+    userDb = new DatabaseSync(path.join(dataDir, 'users.db'));
+  }
 
-    userDb.exec(`
-    CREATE TABLE IF NOT EXISTS profiles (
-      user_id TEXT PRIMARY KEY,
-      display_name TEXT,
-      bio TEXT,
-      avatar_url TEXT,
-      location TEXT,
-      website TEXT,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
+  // Profile table removed from core library. Implement in demo if needed.
 }
 
 export { authDb, userDb };
