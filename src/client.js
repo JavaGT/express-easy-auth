@@ -59,7 +59,23 @@ export class AuthClient {
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
 
-    const data = await res.json().catch(() => ({}));
+    let data = {};
+    const text = await res.text().catch(() => '');
+    
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      // If it's not JSON, check if it's HTML
+      if (text.trim().toLowerCase().startsWith('<!doctype html') || text.trim().toLowerCase().startsWith('<html')) {
+        const titleMatch = text.match(/<title>(.*?)<\/title>/i);
+        const title = titleMatch ? titleMatch[1] : 'HTML Error Page';
+        const bodySnippet = text.replace(/<[^>]*>/g, '').substring(0, 100).trim();
+        data = { error: `Server returned HTML instead of JSON: "${title}". Snippet: ${bodySnippet}...` };
+      } else {
+        data = { error: text.substring(0, 100) || 'Unknown error' };
+      }
+    }
+
     if (!res.ok) {
       throw new AuthError(data.error || 'Request failed', res.status, data.code, data);
     }

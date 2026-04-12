@@ -1,6 +1,6 @@
 {
   "name": "@javagt/express-easy-auth",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "",
   "type": "module",
   "main": "src/index.js",

@@ -13,7 +13,10 @@ import { authDb, getAppSettings } from '../db/init.js';
 import { requireAuth, requireFreshAuth } from '../middleware/auth.js';
 import { generateRecoveryCodes, generateResetToken, getAuthResponse } from '../utils/authHelpers.js';
 
+import { requestId } from '../middleware/requestId.js';
+
 const router = Router();
+router.use(requestId);
 
 const SALT_ROUNDS = 12;
 

@@ -90,12 +90,12 @@ export function authErrorLogger(err, req, res, next) {
             err,
             source: 'server',
             userId: req.session?.userId || null,
+            correlationId: req.id,
             context: {
                 url: req.url,
                 method: req.method,
                 ip: req.ip,
-                userAgent: req.get('user-agent'),
-                requestId: req.get('x-request-id') // If available
+                userAgent: req.get('user-agent')
             }
         });
     } else {
@@ -106,6 +106,7 @@ export function authErrorLogger(err, req, res, next) {
     
     res.status(500).json({ 
         error: exposeErrors ? (err.message || 'Internal server error') : 'Internal server error',
+        correlationId: req.id,
         ...(exposeErrors && { stack: err.stack })
     });
 }

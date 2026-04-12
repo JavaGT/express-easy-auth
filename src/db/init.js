@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 
 let authDb;
-let userDb;
 
 export function initAuthDb(dataDir) {
   if (!authDb) {
@@ -96,6 +95,7 @@ export function initAuthDb(dataDir) {
       stack TEXT,
       context TEXT,
       user_id TEXT,
+      correlation_id TEXT,
       timestamp INTEGER NOT NULL
     );
     
@@ -143,6 +143,7 @@ export function initAuthDb(dataDir) {
     CREATE INDEX IF NOT EXISTS idx_fresh_auth_expires ON fresh_auth_tokens(expires_at);
     CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON system_logs(timestamp);
     CREATE INDEX IF NOT EXISTS idx_logs_level ON system_logs(level);
+    CREATE INDEX IF NOT EXISTS idx_logs_correlation ON system_logs(correlation_id);
   `);
 
   // Migration: Rename old keys if they exist
@@ -182,18 +183,7 @@ export function initAuthDb(dataDir) {
     }
   }
 
-export function initUserDb(dataDir) {
-  if (!userDb) {
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    userDb = new DatabaseSync(path.join(dataDir, 'users.db'));
-  }
-
-  // Profile table removed from core library. Implement in demo if needed.
-}
-
-export { authDb, userDb };
+export { authDb };
 export function getAppSettings() {
   const rows = authDb.prepare('SELECT key, value FROM settings').all();
   return rows.reduce((acc, row) => {

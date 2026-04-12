@@ -23,7 +23,7 @@ export class DefaultLogger extends Logger {
 
   error(message, metadata = {}) {
     if (this.console) {
-      console.error(`[error] ${message}`, metadata.err || '');
+      console.error(`[error]${metadata.correlationId ? ` [${metadata.correlationId}]` : ''} ${message}`, metadata.err || '');
     }
     if (this.db) {
       this._logToDb('error', message, metadata);
@@ -31,28 +31,28 @@ export class DefaultLogger extends Logger {
   }
 
   warn(message, metadata = {}) {
-    if (this.console) console.warn(`[warn] ${message}`, metadata);
+    if (this.console) console.warn(`[warn]${metadata.correlationId ? ` [${metadata.correlationId}]` : ''} ${message}`, metadata);
     if (this.db) this._logToDb('warn', message, metadata);
   }
 
   info(message, metadata = {}) {
-    if (this.console) console.info(`[info] ${message}`, metadata);
+    if (this.console) console.info(`[info]${metadata.correlationId ? ` [${metadata.correlationId}]` : ''} ${message}`, metadata);
     if (this.db) this._logToDb('info', message, metadata);
   }
 
   debug(message, metadata = {}) {
-    if (this.console) console.debug(`[debug] ${message}`, metadata);
+    if (this.console) console.debug(`[debug]${metadata.correlationId ? ` [${metadata.correlationId}]` : ''} ${message}`, metadata);
     // Usually don't log debug to DB unless specified, to save space
   }
 
   _logToDb(level, message, metadata) {
     try {
       if (authDb) {
-        const { err, source = 'server', context = {}, userId = null } = metadata;
+        const { err, source = 'server', context = {}, userId = null, correlationId = null } = metadata;
         
         authDb.prepare(`
-          INSERT INTO system_logs (id, level, source, message, stack, context, user_id, timestamp)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          INSERT INTO system_logs (id, level, source, message, stack, context, user_id, correlation_id, timestamp)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           randomUUID(),
           level,
@@ -61,6 +61,7 @@ export class DefaultLogger extends Logger {
           err?.stack || null,
           JSON.stringify(context),
           userId,
+          correlationId,
           Date.now()
         );
       }

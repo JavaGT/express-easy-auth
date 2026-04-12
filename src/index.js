@@ -1,4 +1,4 @@
-import { initAuthDb, initUserDb, authDb, userDb } from './db/init.js';
+import { initAuthDb, authDb } from './db/init.js';
 import SQLiteSessionStore from './db/sessionStore.js';
 import authRouter from './routes/auth.js';
 import { requireAuth, requireFreshAuth, requireApiKey, authErrorLogger } from './middleware/auth.js';
@@ -27,7 +27,6 @@ export function setupAuth(app, options = {}) {
   const logger = options.logger || new DefaultLogger();
 
   initAuthDb(dataDir);
-  initUserDb(dataDir);
 
   // Store for middleware access
   app.set('config', { ...config, exposeErrors });
@@ -48,7 +47,6 @@ export function setupAuth(app, options = {}) {
 
 export {
   authDb,
-  userDb,
   SQLiteSessionStore,
   authRouter,
   authRouter as auth,
