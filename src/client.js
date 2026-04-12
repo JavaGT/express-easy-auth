@@ -102,10 +102,17 @@ export class AuthClient {
     return this.request('/logout', { method: 'POST' });
   }
 
-  async changePassword(newPassword, token) {
-    return this.request('/change-password', {
+  async changePassword(newPassword) {
+    return this.request('/password/change', {
       method: 'POST',
-      body: { newPassword, token }
+      body: { newPassword }
+    });
+  }
+
+  async changeEmail(newEmail) {
+    return this.request('/email/change', {
+      method: 'POST',
+      body: { newEmail }
     });
   }
 

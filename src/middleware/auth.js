@@ -1,4 +1,4 @@
-import { randomUUID, randomBytes } from 'crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { authDb } from '../db/init.js';
 import bcrypt from 'bcrypt';
 

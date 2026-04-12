@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import bcrypt from 'bcrypt';
-import { randomUUID, randomBytes } from 'crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { verifySync, generateSecret } from 'otplib';
 import QRCode from 'qrcode';
 import { 
@@ -290,7 +290,9 @@ router.post('/2fa/setup', requireAuth, async (req, res) => {
   const secret = generateSecret();
   req.session.pendingTotpSecret = secret;
 
-  const otpauthUrl = `otpauth://totp/${encodeURIComponent('AuthServer')}:${encodeURIComponent(user.email)}?secret=${secret}&issuer=AuthServer`;
+  const { rpName } = getRpConfig(req);
+  const issuer = encodeURIComponent(rpName);
+  const otpauthUrl = `otpauth://totp/${issuer}:${encodeURIComponent(user.email)}?secret=${secret}&issuer=${issuer}`;
   const qrCode = await QRCode.toDataURL(otpauthUrl);
 
   res.json({ secret, qrCode, otpauthUrl });
@@ -447,6 +449,33 @@ router.delete('/passkeys/:id', requireAuth, (req, res) => {
   if (!passkey) return res.status(404).json({ error: 'Passkey not found' });
   authDb.prepare('DELETE FROM passkeys WHERE id = ?').run(id);
   res.json({ success: true });
+});
+
+// ─── ACCOUNT MANAGEMENT ──────────────────────────────────────────────────────
+
+router.post('/password/change', requireFreshAuth, async (req, res) => {
+  const { newPassword } = req.body;
+  if (!newPassword) return res.status(400).json({ error: 'newPassword is required' });
+
+  const settings = getAppSettings();
+  const minLen = parseInt(settings.password_min_length || '8', 10);
+  if (newPassword.length < minLen) {
+    return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
+  }
+
+  const hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  authDb.prepare('UPDATE users SET password_hash=?, updated_at=? WHERE id=?').run(hash, Date.now(), req.userId);
+
+  res.json({ success: true, message: 'Password changed successfully' });
+});
+
+router.post('/email/change', requireFreshAuth, async (req, res) => {
+  const { newEmail } = req.body;
+  if (!newEmail) return res.status(400).json({ error: 'newEmail is required' });
+
+  authDb.prepare('UPDATE users SET email=?, updated_at=? WHERE id=?').run(newEmail, Date.now(), req.userId);
+
+  res.json({ success: true, message: 'Email updated successfully', email: newEmail });
 });
 
 // ─── SESSIONS ────────────────────────────────────────────────────────────────

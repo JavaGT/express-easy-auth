@@ -106,6 +106,20 @@ The library provides a flexible logging system and explicit control over error e
 - **Custom Logger**: Plug in your own logger (e.g., Winston, Pino) by passing it to `setupAuth`.
 - [View Example: Custom Logger](examples/05-custom-logger.js)
 
+### 🌐 SPA Fallback (Modern Alternative to Wildcard Routes)
+When building Single Page Applications (SPAs), avoid using catch-all wildcard routes (e.g., `app.get('*', ...)`) as they can cause routing conflicts and `PathError` in newer versions of Express. 
+
+Instead, use a middleware-based fallback that only triggers for HTML requests:
+```javascript
+app.use((req, res, next) => {
+  if (req.method === 'GET' && req.accepts('html') && !req.path.startsWith('/api')) {
+    res.sendFile(path.join(__dirname, 'public/index.html'));
+  } else {
+    next();
+  }
+});
+```
+
 ---
 
 ## 📜 API Reference
@@ -128,6 +142,8 @@ All identity endpoints are nested under the router (recommended path: `/api/v1/a
 | | POST | `/passkeys/authenticate/verify` | — | Verify passkey login |
 | | GET | `/passkeys` | ✓ | List registered passkeys |
 | | DELETE | `/passkeys/:id` | ✓ | Delete a passkey |
+| **Account** | POST | `/password/change` | ✓ (Fresh) | Change current password |
+| | POST | `/email/change` | ✓ (Fresh) | Update email address |
 | **Password Reset** | POST | `/password-reset/request` | — | Generate reset token |
 | | POST | `/password-reset/reset` | — | Complete reset |
 | **API Keys** | GET | `/api-keys` | ✓ | List user API keys |
