@@ -36,17 +36,17 @@ router.post('/register', async (req, res) => {
   if (!username || !email || !password) {
     return getAuthResponse(req, res, {
       status: 400,
-      data: { error: 'username, email, and password are required' }
+      data: { error: 'username, email, and password are required', code: 'MISSING_CREDENTIALS' }
     });
   }
   const settings = getAppSettings();
   if (settings.auth_registration_enabled !== 'true') {
-    return res.status(403).json({ error: 'Registration is currently disabled' });
+    return res.status(403).json({ error: 'Registration is currently disabled', code: 'REGISTRATION_DISABLED' });
   }
 
   const minLen = parseInt(settings.password_min_length || '8', 10);
   if (password.length < minLen) {
-    return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
+    return res.status(400).json({ error: `Password must be at least ${minLen} characters`, code: 'PASSWORD_TOO_SHORT' });
   }
 
   const db = authDb;
@@ -54,7 +54,7 @@ router.post('/register', async (req, res) => {
   if (existing) {
     return getAuthResponse(req, res, {
       status: 409,
-      data: { error: 'Username or email already taken' }
+      data: { error: 'Username or email already taken', code: 'USER_EXISTS' }
     });
   }
 
@@ -87,7 +87,7 @@ router.post('/login', async (req, res) => {
   if (!username || !password) {
     return getAuthResponse(req, res, {
       status: 400,
-      data: { error: 'username and password are required' }
+      data: { error: 'username and password are required', code: 'MISSING_CREDENTIALS' }
     });
   }
 
@@ -99,7 +99,7 @@ router.post('/login', async (req, res) => {
     await bcrypt.hash('dummy', SALT_ROUNDS);
     return getAuthResponse(req, res, {
       status: 401,
-      data: { error: 'Invalid credentials' }
+      data: { error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' }
     });
   }
 
@@ -108,7 +108,7 @@ router.post('/login', async (req, res) => {
     const minsLeft = Math.ceil((user.locked_until - now) / 60000);
     return getAuthResponse(req, res, {
       status: 403,
-      data: { error: `Account locked. Please try again in ${minsLeft} minutes.` }
+      data: { error: `Account locked. Please try again in ${minsLeft} minutes.`, code: 'ACCOUNT_LOCKED' }
     });
   }
 
@@ -128,7 +128,10 @@ router.post('/login', async (req, res) => {
 
     return getAuthResponse(req, res, {
       status: 401,
-      data: { error: failed >= maxAttempts ? `Account locked for ${lockoutMins} minutes` : 'Invalid credentials' }
+      data: { 
+        error: failed >= maxAttempts ? `Account locked for ${lockoutMins} minutes` : 'Invalid credentials',
+        code: failed >= maxAttempts ? 'ACCOUNT_LOCKED' : 'INVALID_CREDENTIALS'
+      }
     });
   }
 
@@ -153,7 +156,7 @@ router.post('/login', async (req, res) => {
     if (!valid2FA?.valid) {
       return getAuthResponse(req, res, {
         status: 401,
-        data: { error: 'Invalid 2FA code' }
+        data: { error: 'Invalid 2FA code', code: 'INVALID_2FA_CODE' }
       });
     }
   }
@@ -174,13 +177,13 @@ router.post('/login/recovery', async (req, res) => {
   if (!username) username = req.session.pendingUsername;
 
   if (!username || !code) {
-    return getAuthResponse(req, res, { status: 400, data: { error: 'Username and recovery code are required' } });
+    return getAuthResponse(req, res, { status: 400, data: { error: 'Username and recovery code are required', code: 'MISSING_CREDENTIALS' } });
   }
 
   const db = authDb;
   const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username || null, username || null);
   if (!user) {
-    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery attempt' } });
+    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery attempt', code: 'INVALID_CREDENTIALS' } });
   }
 
   const codes = db.prepare('SELECT * FROM recovery_codes WHERE user_id=? AND used=0').all(user.id);
@@ -193,7 +196,7 @@ router.post('/login/recovery', async (req, res) => {
   }
 
   if (!matchedCodeId) {
-    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery code' } });
+    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery code', code: 'INVALID_RECOVERY_CODE' } });
   }
 
   db.prepare('UPDATE recovery_codes SET used=1 WHERE id=?').run(matchedCodeId);
@@ -268,15 +271,15 @@ router.post(['/fresh-auth', '/reauth'], requireAuth, async (req, res) => {
 
   if (password) {
     const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid password' });
+    if (!valid) return res.status(401).json({ error: 'Invalid password', code: 'INVALID_PASSWORD' });
 
     if (user.totp_enabled) {
       if (!submittedToken) return res.json({ requires2FA: true });
       const ok = verifySync({ token: submittedToken, secret: user.totp_secret, type: 'totp' });
-      if (!ok?.valid) return res.status(401).json({ error: 'Invalid TOTP code' });
+      if (!ok?.valid) return res.status(401).json({ error: 'Invalid TOTP code', code: 'INVALID_2FA_CODE' });
     }
   } else {
-    return res.status(400).json({ error: 'password required for reauth' });
+    return res.status(400).json({ error: 'password required for reauth', code: 'MISSING_PASSWORD' });
   }
 
   req.session.lastAuthedAt = Date.now();
@@ -302,14 +305,14 @@ router.post('/2fa/verify-setup', requireAuth, (req, res) => {
   const { code, token } = req.body;
   const submittedToken = token || code;
   const secret = req.session.pendingTotpSecret;
-  if (!secret) return res.status(400).json({ error: 'No pending TOTP setup' });
+  if (!secret) return res.status(400).json({ error: 'No pending TOTP setup', code: 'NO_PENDING_2FA' });
 
   const valid = verifySync({ token: submittedToken, secret, type: 'totp' });
-  if (!valid?.valid) return res.status(401).json({ error: 'Invalid code' });
+  if (!valid?.valid) return res.status(401).json({ error: 'Invalid code', code: 'INVALID_2FA_CODE' });
 
   authDb.prepare('UPDATE users SET totp_secret=?, totp_enabled=1 WHERE id=?').run(secret, req.session.userId);
 
-  generateRecoveryCodes(10).then(({ codes, hashes }) => {
+  generateRecoveryCodes(10).then(({ plain: codes, hashes }) => {
     const now = Date.now();
     const stmt = authDb.prepare('INSERT INTO recovery_codes (id, user_id, code_hash, created_at) VALUES (?, ?, ?, ?)');
     for (const hash of hashes) {
@@ -357,11 +360,11 @@ router.post('/passkeys/register/verify', requireAuth, async (req, res) => {
   const challengeRow = authDb.prepare('SELECT * FROM webauthn_challenges WHERE user_id = ? AND type = \'registration\' AND expires_at > ? ORDER BY created_at DESC LIMIT 1')
     .get(req.userId, Date.now());
 
-  if (!challengeRow) return res.status(400).json({ error: 'No valid challenge found' });
+  if (!challengeRow) return res.status(400).json({ error: 'No valid challenge found', code: 'WEBAUTHN_CHALLENGE_NOT_FOUND' });
 
   try {
     const verification = await verifyRegistrationResponse({ response, expectedChallenge: challengeRow.challenge, expectedOrigin: origin, expectedRPID: rpID });
-    if (!verification.verified || !verification.registrationInfo) return res.status(400).json({ error: 'Passkey registration failed' });
+    if (!verification.verified || !verification.registrationInfo) return res.status(400).json({ error: 'Passkey registration failed', code: 'PASSKEY_REGISTRATION_FAILED' });
 
     const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
     const now = Date.now();
@@ -407,14 +410,14 @@ router.post('/passkeys/authenticate/verify', async (req, res) => {
   const { rpID, origin } = getRpConfig(req);
   const { response } = req.body;
   const challenge = req.session.passkeyChallenge;
-  if (!challenge) return res.status(400).json({ error: 'No active passkey challenge' });
+  if (!challenge) return res.status(400).json({ error: 'No active passkey challenge', code: 'WEBAUTHN_CHALLENGE_NOT_FOUND' });
 
   const challengeRow = authDb.prepare('SELECT * FROM webauthn_challenges WHERE challenge = ? AND type = \'authentication\' AND expires_at > ? ORDER BY created_at DESC LIMIT 1')
     .get(challenge, Date.now());
-  if (!challengeRow) return res.status(400).json({ error: 'Challenge expired or not found' });
+  if (!challengeRow) return res.status(400).json({ error: 'Challenge expired or not found', code: 'WEBAUTHN_CHALLENGE_EXPIRED' });
 
   const passkey = authDb.prepare('SELECT * FROM passkeys WHERE credential_id = ?').get(response.id);
-  if (!passkey) return res.status(400).json({ error: 'Passkey not registered' });
+  if (!passkey) return res.status(400).json({ error: 'Passkey not registered', code: 'PASSKEY_NOT_FOUND' });
 
   try {
     const verification = await verifyAuthenticationResponse({
@@ -423,7 +426,7 @@ router.post('/passkeys/authenticate/verify', async (req, res) => {
       transports: passkey.transports ? JSON.parse(passkey.transports) : [] }
     });
 
-    if (!verification.verified) return res.status(401).json({ error: 'Passkey verification failed' });
+    if (!verification.verified) return res.status(401).json({ error: 'Passkey verification failed', code: 'PASSKEY_VERIFICATION_FAILED' });
 
     authDb.prepare('UPDATE passkeys SET counter = ?, last_used = ? WHERE id = ?').run(verification.authenticationInfo.newCounter, Date.now(), passkey.id);
     authDb.prepare('DELETE FROM webauthn_challenges WHERE id = ?').run(challengeRow.id);

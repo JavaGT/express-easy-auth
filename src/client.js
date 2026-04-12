@@ -5,6 +5,16 @@
  * TOTP 2FA, and session management.
  */
 
+export class AuthError extends Error {
+  constructor(message, status, code, data = {}) {
+    super(message || 'Authentication request failed');
+    this.name = 'AuthError';
+    this.status = status;
+    this.code = code;
+    this.data = data;
+  }
+}
+
 export class AuthClient {
   /**
    * @param {Object} options
@@ -51,11 +61,7 @@ export class AuthClient {
 
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      throw Object.assign(new Error(data.error || 'Request failed'), {
-        code: data.code,
-        status: res.status,
-        data,
-      });
+      throw new AuthError(data.error || 'Request failed', res.status, data.code, data);
     }
     return data;
   }

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
 import { DefaultLogger } from './utils/logger.js';
-import { AuthClient } from './client.js';
+import { AuthClient, AuthError } from './client.js';
 
 /**
  * Initializes the authentication databases and configuration.
@@ -57,5 +57,6 @@ export {
   requireApiKey,
   authErrorLogger,
   DefaultLogger,
-  AuthClient
+  AuthClient,
+  AuthError
 };
