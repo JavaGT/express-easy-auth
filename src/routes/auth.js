@@ -312,7 +312,7 @@ router.post('/2fa/verify-setup', requireAuth, (req, res) => {
 
   authDb.prepare('UPDATE users SET totp_secret=?, totp_enabled=1 WHERE id=?').run(secret, req.session.userId);
 
-  generateRecoveryCodes(10).then(({ plain: codes, hashes }) => {
+  generateRecoveryCodes(10).then(({ plain: codes, hashed: hashes }) => {
     const now = Date.now();
     const stmt = authDb.prepare('INSERT INTO recovery_codes (id, user_id, code_hash, created_at) VALUES (?, ?, ?, ?)');
     for (const hash of hashes) {
