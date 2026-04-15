@@ -1,6 +1,6 @@
 {
   "name": "@javagt/express-easy-auth",
-  "version": "1.0.4",
+  "version": "2.0.0",
   "description": "",
   "type": "module",
   "main": "src/index.js",
@@ -9,7 +9,7 @@
     "./client": "./src/client.js"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --test test/*.test.js",
     "start": "node demo/server.js",
     "dev": "node demo/server.js"
   },
@@ -31,5 +31,13 @@
     "otplib": "^13.4.0",
     "qrcode": "^1.5.4",
     "uuid": "^13.0.0"
-  }
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
+  },
+  "files": [
+    "src",
+    "readme.md",
+    "CHANGELOG.md"
+  ]
 }

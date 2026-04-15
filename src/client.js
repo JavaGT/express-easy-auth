@@ -34,11 +34,6 @@ export class AuthClient {
    * @param {string} path - The API path (relative to /auth or /v1)
    * @param {Object} [options] - Fetch options
    */
-  /**
-   * Standard fetch wrapper with error handling
-   * @param {string} path - The API path (relative to /auth or /v1)
-   * @param {Object} [options] - Fetch options
-   */
   async request(path, options = {}) {
     // Standardize path: remove redundant prefixes if they exist
     let cleanPath = path
@@ -77,7 +72,18 @@ export class AuthClient {
     }
 
     if (!res.ok) {
-      throw new AuthError(data.error || 'Request failed', res.status, data.code, data);
+      const errPayload = data.error;
+      const message =
+        errPayload && typeof errPayload === 'object' && errPayload !== null && 'message' in errPayload
+          ? errPayload.message
+          : typeof errPayload === 'string'
+            ? errPayload
+            : 'Request failed';
+      const code =
+        errPayload && typeof errPayload === 'object' && errPayload !== null && 'code' in errPayload
+          ? errPayload.code
+          : data.code;
+      throw new AuthError(message, res.status, code, data);
     }
     return data;
   }
@@ -168,11 +174,16 @@ export class AuthClient {
     });
   }
 
+  /**
+   * Sign in with a passkey. Omit `username` (or pass undefined) for discoverable credentials
+   * (empty allowCredentials — username-less / Conditional UI friendly login).
+   * @param {string} [username] - Optional account hint; if omitted, body is `{}`.
+   */
   async loginWithPasskey(username) {
     if (!window.PublicKeyCredential) throw new Error('WebAuthn not supported');
     const opts = await this.request('/passkeys/authenticate/options', {
       method: 'POST',
-      body: { username },
+      body: username != null && username !== '' ? { username } : {},
     });
     const requestOptions = {
       ...opts,

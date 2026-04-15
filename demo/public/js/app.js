@@ -378,7 +378,7 @@ $('btn-test-key').addEventListener('click', async () => {
             toast('API Key valid!');
         } else {
             log.classList.add('test-error');
-            toast('Request failed: ' + (data.error || 'Unknown error'), 'error');
+            toast('Request failed: ' + (data.error?.message ?? data.error ?? 'Unknown error'), 'error');
         }
     } catch (e) {
         log.textContent = 'Connection Error: ' + e.message;

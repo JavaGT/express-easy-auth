@@ -1,12 +1,13 @@
-import { randomUUID, randomBytes } from 'node:crypto';
 import { authDb } from '../db/init.js';
 import bcrypt from 'bcrypt';
-
-const FRESH_AUTH_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+import { formatAuthError } from '../utils/authHelpers.js';
 
 export function requireAuth(req, res, next) {
     if (!req.session?.userId) {
-        return res.status(401).json({ error: 'Not authenticated' });
+        return formatAuthError(res, 401, {
+            code: 'NOT_AUTHENTICATED',
+            message: 'Not authenticated'
+        });
     }
     req.userId = req.session.userId; // Convenience attachment
     next();
@@ -14,7 +15,10 @@ export function requireAuth(req, res, next) {
 
 export function requireFreshAuth(req, res, next) {
     if (!req.session?.userId) {
-        return res.status(401).json({ error: 'Not authenticated' });
+        return formatAuthError(res, 401, {
+            code: 'NOT_AUTHENTICATED',
+            message: 'Not authenticated'
+        });
     }
     req.userId = req.session.userId; // Ensure it's there too
     const lastAuthed = req.session.lastAuthedAt;
@@ -25,10 +29,10 @@ export function requireFreshAuth(req, res, next) {
     const windowMs = durationMins * 60 * 1000;
 
     if (!lastAuthed || Date.now() - lastAuthed > windowMs) {
-        return res.status(403).json({
-            error: 'Fresh authentication required',
+        return formatAuthError(res, 403, {
             code: 'FRESH_AUTH_REQUIRED',
-            freshAuthWindowMs: windowMs
+            message: 'Fresh authentication required',
+            details: { freshAuthWindowMs: windowMs }
         });
     }
     next();
@@ -48,12 +52,18 @@ export async function requireApiKey(req, res, next) {
     }
 
     if (!key) {
-        return res.status(401).json({ error: 'API Key required' });
+        return formatAuthError(res, 401, {
+            code: 'API_KEY_REQUIRED',
+            message: 'API Key required'
+        });
     }
 
     const parts = key.split('_');
     if (parts.length < 4) {
-        return res.status(401).json({ error: 'Invalid API Key format' });
+        return formatAuthError(res, 401, {
+            code: 'INVALID_API_KEY_FORMAT',
+            message: 'Invalid API Key format'
+        });
     }
 
     const keyId = parts[2];
@@ -61,12 +71,18 @@ export async function requireApiKey(req, res, next) {
 
     const apiKey = authDb.prepare('SELECT * FROM api_keys WHERE id = ?').get(keyId);
     if (!apiKey) {
-        return res.status(401).json({ error: 'Invalid API Key' });
+        return formatAuthError(res, 401, {
+            code: 'INVALID_API_KEY',
+            message: 'Invalid API Key'
+        });
     }
 
     const valid = await bcrypt.compare(secret, apiKey.key_hash);
     if (!valid) {
-        return res.status(401).json({ error: 'Invalid API Key' });
+        return formatAuthError(res, 401, {
+            code: 'INVALID_API_KEY',
+            message: 'Invalid API Key'
+        });
     }
 
     // Update last used
@@ -82,8 +98,7 @@ export async function requireApiKey(req, res, next) {
  */
 export function authErrorLogger(err, req, res, next) {
     const logger = req.app.get('logger');
-    const config = req.app.get('config') || {};
-    const exposeErrors = config.exposeErrors;
+    const exposeErrors = req.app.get('exposeErrors');
 
     if (logger) {
         logger.error(err.message || String(err), {
@@ -103,10 +118,17 @@ export function authErrorLogger(err, req, res, next) {
     }
 
     if (res.headersSent) return next(err);
-    
-    res.status(500).json({ 
-        error: exposeErrors ? (err.message || 'Internal server error') : 'Internal server error',
-        correlationId: req.id,
-        ...(exposeErrors && { stack: err.stack })
-    });
+
+    const message = exposeErrors ? (err.message || 'Internal server error') : 'Internal server error';
+    const payload = {
+        error: {
+            code: 'INTERNAL_ERROR',
+            message
+        },
+        correlationId: req.id
+    };
+    if (exposeErrors && err.stack) {
+        payload.stack = err.stack;
+    }
+    res.status(500).json(payload);
 }

@@ -87,6 +87,7 @@ app.get('/', (req, res) => {
 
         document.getElementById('pkLoginBtn').onclick = async () => {
           try {
+            // Omit username for discoverable credentials (server sends empty allowCredentials).
             const res = await auth.loginWithPasskey();
             alert('Logged in with Passkey!');
             await updateStatus();

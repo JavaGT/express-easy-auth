@@ -11,7 +11,7 @@ import {
 } from '@simplewebauthn/server';
 import { authDb, getAppSettings } from '../db/init.js';
 import { requireAuth, requireFreshAuth } from '../middleware/auth.js';
-import { generateRecoveryCodes, generateResetToken, getAuthResponse } from '../utils/authHelpers.js';
+import { generateRecoveryCodes, generateResetToken, getAuthResponse, formatAuthError, resolveWebAuthnOptions } from '../utils/authHelpers.js';
 
 import { requestId } from '../middleware/requestId.js';
 
@@ -20,16 +20,11 @@ router.use(requestId);
 
 const SALT_ROUNDS = 12;
 
-// ─── HELPER ──────────────────────────────────────────────────────────────────
-
-function getRpConfig(req) {
-  const config = req.app.get('config');
-  if (!config) throw new Error('Server configuration missing');
-  return {
-    rpName: config.rpName || 'Auth Server',
-    rpID: config.rpID,
-    origin: config.origin,
-  };
+function requireApiKeysEnabled(req, res, next) {
+  if (req.app.get('enableApiKeys') === false) {
+    return formatAuthError(res, 404, { code: 'NOT_FOUND', message: 'Not found' });
+  }
+  next();
 }
 
 // ─── AUTH CORE ───────────────────────────────────────────────────────────────
@@ -39,17 +34,17 @@ router.post('/register', async (req, res) => {
   if (!username || !email || !password) {
     return getAuthResponse(req, res, {
       status: 400,
-      data: { error: 'username, email, and password are required', code: 'MISSING_CREDENTIALS' }
+      error: { code: 'MISSING_CREDENTIALS', message: 'username, email, and password are required' }
     });
   }
   const settings = getAppSettings();
   if (settings.auth_registration_enabled !== 'true') {
-    return res.status(403).json({ error: 'Registration is currently disabled', code: 'REGISTRATION_DISABLED' });
+    return formatAuthError(res, 403, { code: 'REGISTRATION_DISABLED', message: 'Registration is currently disabled' });
   }
 
   const minLen = parseInt(settings.password_min_length || '8', 10);
   if (password.length < minLen) {
-    return res.status(400).json({ error: `Password must be at least ${minLen} characters`, code: 'PASSWORD_TOO_SHORT' });
+    return formatAuthError(res, 400, { code: 'PASSWORD_TOO_SHORT', message: `Password must be at least ${minLen} characters` });
   }
 
   const db = authDb;
@@ -57,7 +52,7 @@ router.post('/register', async (req, res) => {
   if (existing) {
     return getAuthResponse(req, res, {
       status: 409,
-      data: { error: 'Username or email already taken', code: 'USER_EXISTS' }
+      error: { code: 'USER_EXISTS', message: 'Username or email already taken' }
     });
   }
 
@@ -90,7 +85,7 @@ router.post('/login', async (req, res) => {
   if (!username || !password) {
     return getAuthResponse(req, res, {
       status: 400,
-      data: { error: 'username and password are required', code: 'MISSING_CREDENTIALS' }
+      error: { code: 'MISSING_CREDENTIALS', message: 'username and password are required' }
     });
   }
 
@@ -102,7 +97,7 @@ router.post('/login', async (req, res) => {
     await bcrypt.hash('dummy', SALT_ROUNDS);
     return getAuthResponse(req, res, {
       status: 401,
-      data: { error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' }
+      error: { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials' }
     });
   }
 
@@ -111,7 +106,7 @@ router.post('/login', async (req, res) => {
     const minsLeft = Math.ceil((user.locked_until - now) / 60000);
     return getAuthResponse(req, res, {
       status: 403,
-      data: { error: `Account locked. Please try again in ${minsLeft} minutes.`, code: 'ACCOUNT_LOCKED' }
+      error: { code: 'ACCOUNT_LOCKED', message: `Account locked. Please try again in ${minsLeft} minutes.` }
     });
   }
 
@@ -131,10 +126,9 @@ router.post('/login', async (req, res) => {
 
     return getAuthResponse(req, res, {
       status: 401,
-      data: { 
-        error: failed >= maxAttempts ? `Account locked for ${lockoutMins} minutes` : 'Invalid credentials',
-        code: failed >= maxAttempts ? 'ACCOUNT_LOCKED' : 'INVALID_CREDENTIALS'
-      }
+      error: failed >= maxAttempts
+        ? { code: 'ACCOUNT_LOCKED', message: `Account locked for ${lockoutMins} minutes` }
+        : { code: 'INVALID_CREDENTIALS', message: 'Invalid credentials' }
     });
   }
 
@@ -150,7 +144,8 @@ router.post('/login', async (req, res) => {
       req.session.pendingUsername = user.username;
       return getAuthResponse(req, res, {
         status: 401,
-        data: { requires2FA: true, error: 'Two-factor authentication required', code: '2FA_REQUIRED' },
+        error: { code: '2FA_REQUIRED', message: 'Two-factor authentication required' },
+        data: { requires2FA: true },
         redirect: '/?requires2FA=true'
       });
     }
@@ -159,7 +154,7 @@ router.post('/login', async (req, res) => {
     if (!valid2FA?.valid) {
       return getAuthResponse(req, res, {
         status: 401,
-        data: { error: 'Invalid 2FA code', code: 'INVALID_2FA_CODE' }
+        error: { code: 'INVALID_2FA_CODE', message: 'Invalid 2FA code' }
       });
     }
   }
@@ -180,13 +175,13 @@ router.post('/login/recovery', async (req, res) => {
   if (!username) username = req.session.pendingUsername;
 
   if (!username || !code) {
-    return getAuthResponse(req, res, { status: 400, data: { error: 'Username and recovery code are required', code: 'MISSING_CREDENTIALS' } });
+    return getAuthResponse(req, res, { status: 400, error: { code: 'MISSING_CREDENTIALS', message: 'Username and recovery code are required' } });
   }
 
   const db = authDb;
   const user = db.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username || null, username || null);
   if (!user) {
-    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery attempt', code: 'INVALID_CREDENTIALS' } });
+    return getAuthResponse(req, res, { status: 401, error: { code: 'INVALID_CREDENTIALS', message: 'Invalid recovery attempt' } });
   }
 
   const codes = db.prepare('SELECT * FROM recovery_codes WHERE user_id=? AND used=0').all(user.id);
@@ -199,7 +194,7 @@ router.post('/login/recovery', async (req, res) => {
   }
 
   if (!matchedCodeId) {
-    return getAuthResponse(req, res, { status: 401, data: { error: 'Invalid recovery code', code: 'INVALID_RECOVERY_CODE' } });
+    return getAuthResponse(req, res, { status: 401, error: { code: 'INVALID_RECOVERY_CODE', message: 'Invalid recovery code' } });
   }
 
   db.prepare('UPDATE recovery_codes SET used=1 WHERE id=?').run(matchedCodeId);
@@ -251,7 +246,7 @@ router.get('/status', (req, res) => {
 
 router.get('/me', requireAuth, (req, res) => {
   const user = authDb.prepare('SELECT id, username, email, totp_enabled FROM users WHERE id=?').get(req.session.userId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user) return formatAuthError(res, 404, { code: 'USER_NOT_FOUND', message: 'User not found' });
 
   const passkeys = authDb.prepare('SELECT id, friendly_name, device_type, created_at FROM passkeys WHERE user_id=?').all(req.session.userId);
 
@@ -274,15 +269,20 @@ router.post(['/fresh-auth', '/reauth'], requireAuth, async (req, res) => {
 
   if (password) {
     const valid = await bcrypt.compare(password, user.password_hash);
-    if (!valid) return res.status(401).json({ error: 'Invalid password', code: 'INVALID_PASSWORD' });
+    if (!valid) return formatAuthError(res, 401, { code: 'INVALID_PASSWORD', message: 'Invalid password' });
 
     if (user.totp_enabled) {
-      if (!submittedToken) return res.json({ requires2FA: true });
+      if (!submittedToken) {
+        return res.json({
+          requires2FA: true,
+          error: { code: '2FA_REQUIRED', message: 'Two-factor authentication required' }
+        });
+      }
       const ok = verifySync({ token: submittedToken, secret: user.totp_secret, type: 'totp' });
-      if (!ok?.valid) return res.status(401).json({ error: 'Invalid TOTP code', code: 'INVALID_2FA_CODE' });
+      if (!ok?.valid) return formatAuthError(res, 401, { code: 'INVALID_2FA_CODE', message: 'Invalid TOTP code' });
     }
   } else {
-    return res.status(400).json({ error: 'password required for reauth', code: 'MISSING_PASSWORD' });
+    return formatAuthError(res, 400, { code: 'MISSING_PASSWORD', message: 'password required for reauth' });
   }
 
   req.session.lastAuthedAt = Date.now();
@@ -296,7 +296,7 @@ router.post('/2fa/setup', requireAuth, async (req, res) => {
   const secret = generateSecret();
   req.session.pendingTotpSecret = secret;
 
-  const { rpName } = getRpConfig(req);
+  const { rpName } = resolveWebAuthnOptions(req);
   const issuer = encodeURIComponent(rpName);
   const otpauthUrl = `otpauth://totp/${issuer}:${encodeURIComponent(user.email)}?secret=${secret}&issuer=${issuer}`;
   const qrCode = await QRCode.toDataURL(otpauthUrl);
@@ -308,10 +308,10 @@ router.post('/2fa/verify-setup', requireAuth, (req, res) => {
   const { code, token } = req.body;
   const submittedToken = token || code;
   const secret = req.session.pendingTotpSecret;
-  if (!secret) return res.status(400).json({ error: 'No pending TOTP setup', code: 'NO_PENDING_2FA' });
+  if (!secret) return formatAuthError(res, 400, { code: 'NO_PENDING_2FA', message: 'No pending TOTP setup' });
 
   const valid = verifySync({ token: submittedToken, secret, type: 'totp' });
-  if (!valid?.valid) return res.status(401).json({ error: 'Invalid code', code: 'INVALID_2FA_CODE' });
+  if (!valid?.valid) return formatAuthError(res, 401, { code: 'INVALID_2FA_CODE', message: 'Invalid code' });
 
   authDb.prepare('UPDATE users SET totp_secret=?, totp_enabled=1 WHERE id=?').run(secret, req.session.userId);
 
@@ -337,9 +337,9 @@ router.post('/2fa/disable', requireFreshAuth, (req, res) => {
 // ─── PASSKEYS ────────────────────────────────────────────────────────────────
 
 router.post('/passkeys/register/options', requireAuth, async (req, res) => {
-  const { rpName, rpID } = getRpConfig(req);
+  const { rpName, rpID } = resolveWebAuthnOptions(req);
   const user = authDb.prepare('SELECT * FROM users WHERE id = ?').get(req.userId);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user) return formatAuthError(res, 404, { code: 'USER_NOT_FOUND', message: 'User not found' });
 
   const existingCredentials = authDb.prepare('SELECT credential_id, transports FROM passkeys WHERE user_id = ?').all(req.userId);
   const excludeCredentials = existingCredentials.map(c => ({ id: c.credential_id, transports: c.transports ? JSON.parse(c.transports) : [] }));
@@ -358,16 +358,18 @@ router.post('/passkeys/register/options', requireAuth, async (req, res) => {
 });
 
 router.post('/passkeys/register/verify', requireAuth, async (req, res) => {
-  const { rpID, origin } = getRpConfig(req);
+  const { rpID, origin } = resolveWebAuthnOptions(req);
   const { response, name } = req.body;
   const challengeRow = authDb.prepare('SELECT * FROM webauthn_challenges WHERE user_id = ? AND type = \'registration\' AND expires_at > ? ORDER BY created_at DESC LIMIT 1')
     .get(req.userId, Date.now());
 
-  if (!challengeRow) return res.status(400).json({ error: 'No valid challenge found', code: 'WEBAUTHN_CHALLENGE_NOT_FOUND' });
+  if (!challengeRow) return formatAuthError(res, 400, { code: 'WEBAUTHN_CHALLENGE_NOT_FOUND', message: 'No valid challenge found' });
 
   try {
     const verification = await verifyRegistrationResponse({ response, expectedChallenge: challengeRow.challenge, expectedOrigin: origin, expectedRPID: rpID });
-    if (!verification.verified || !verification.registrationInfo) return res.status(400).json({ error: 'Passkey registration failed', code: 'PASSKEY_REGISTRATION_FAILED' });
+    if (!verification.verified || !verification.registrationInfo) {
+      return formatAuthError(res, 400, { code: 'PASSKEY_REGISTRATION_FAILED', message: 'Passkey registration failed' });
+    }
 
     const { credential, credentialDeviceType, credentialBackedUp } = verification.registrationInfo;
     const now = Date.now();
@@ -381,12 +383,12 @@ router.post('/passkeys/register/verify', requireAuth, async (req, res) => {
     authDb.prepare('DELETE FROM webauthn_challenges WHERE id = ?').run(challengeRow.id);
     res.json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    formatAuthError(res, 400, { code: 'WEBAUTHN_ERROR', message: err.message || 'WebAuthn error' });
   }
 });
 
 router.post('/passkeys/authenticate/options', async (req, res) => {
-  const { rpID } = getRpConfig(req);
+  const { rpID } = resolveWebAuthnOptions(req);
   const { username } = req.body;
   let allowCredentials = [];
   let userId = null;
@@ -410,17 +412,17 @@ router.post('/passkeys/authenticate/options', async (req, res) => {
 });
 
 router.post('/passkeys/authenticate/verify', async (req, res) => {
-  const { rpID, origin } = getRpConfig(req);
+  const { rpID, origin } = resolveWebAuthnOptions(req);
   const { response } = req.body;
   const challenge = req.session.passkeyChallenge;
-  if (!challenge) return res.status(400).json({ error: 'No active passkey challenge', code: 'WEBAUTHN_CHALLENGE_NOT_FOUND' });
+  if (!challenge) return formatAuthError(res, 400, { code: 'WEBAUTHN_CHALLENGE_NOT_FOUND', message: 'No active passkey challenge' });
 
   const challengeRow = authDb.prepare('SELECT * FROM webauthn_challenges WHERE challenge = ? AND type = \'authentication\' AND expires_at > ? ORDER BY created_at DESC LIMIT 1')
     .get(challenge, Date.now());
-  if (!challengeRow) return res.status(400).json({ error: 'Challenge expired or not found', code: 'WEBAUTHN_CHALLENGE_EXPIRED' });
+  if (!challengeRow) return formatAuthError(res, 400, { code: 'WEBAUTHN_CHALLENGE_EXPIRED', message: 'Challenge expired or not found' });
 
   const passkey = authDb.prepare('SELECT * FROM passkeys WHERE credential_id = ?').get(response.id);
-  if (!passkey) return res.status(400).json({ error: 'Passkey not registered', code: 'PASSKEY_NOT_FOUND' });
+  if (!passkey) return formatAuthError(res, 400, { code: 'PASSKEY_NOT_FOUND', message: 'Passkey not registered' });
 
   try {
     const verification = await verifyAuthenticationResponse({
@@ -429,7 +431,9 @@ router.post('/passkeys/authenticate/verify', async (req, res) => {
       transports: passkey.transports ? JSON.parse(passkey.transports) : [] }
     });
 
-    if (!verification.verified) return res.status(401).json({ error: 'Passkey verification failed', code: 'PASSKEY_VERIFICATION_FAILED' });
+    if (!verification.verified) {
+      return formatAuthError(res, 401, { code: 'PASSKEY_VERIFICATION_FAILED', message: 'Passkey verification failed' });
+    }
 
     authDb.prepare('UPDATE passkeys SET counter = ?, last_used = ? WHERE id = ?').run(verification.authenticationInfo.newCounter, Date.now(), passkey.id);
     authDb.prepare('DELETE FROM webauthn_challenges WHERE id = ?').run(challengeRow.id);
@@ -440,7 +444,7 @@ router.post('/passkeys/authenticate/verify', async (req, res) => {
     req.session.loginMethod = 'passkey';
     res.json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    formatAuthError(res, 400, { code: 'WEBAUTHN_ERROR', message: err.message || 'WebAuthn error' });
   }
 });
 
@@ -452,7 +456,7 @@ router.get('/passkeys', requireAuth, (req, res) => {
 router.delete('/passkeys/:id', requireAuth, (req, res) => {
   const { id } = req.params;
   const passkey = authDb.prepare('SELECT id FROM passkeys WHERE id = ? AND user_id = ?').get(id, req.userId);
-  if (!passkey) return res.status(404).json({ error: 'Passkey not found' });
+  if (!passkey) return formatAuthError(res, 404, { code: 'PASSKEY_NOT_FOUND', message: 'Passkey not found' });
   authDb.prepare('DELETE FROM passkeys WHERE id = ?').run(id);
   res.json({ success: true });
 });
@@ -461,12 +465,12 @@ router.delete('/passkeys/:id', requireAuth, (req, res) => {
 
 router.post('/password/change', requireFreshAuth, async (req, res) => {
   const { newPassword } = req.body;
-  if (!newPassword) return res.status(400).json({ error: 'newPassword is required' });
+  if (!newPassword) return formatAuthError(res, 400, { code: 'MISSING_PASSWORD', message: 'newPassword is required' });
 
   const settings = getAppSettings();
   const minLen = parseInt(settings.password_min_length || '8', 10);
   if (newPassword.length < minLen) {
-    return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
+    return formatAuthError(res, 400, { code: 'PASSWORD_TOO_SHORT', message: `Password must be at least ${minLen} characters` });
   }
 
   const hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
@@ -477,7 +481,7 @@ router.post('/password/change', requireFreshAuth, async (req, res) => {
 
 router.post('/email/change', requireFreshAuth, async (req, res) => {
   const { newEmail } = req.body;
-  if (!newEmail) return res.status(400).json({ error: 'newEmail is required' });
+  if (!newEmail) return formatAuthError(res, 400, { code: 'MISSING_EMAIL', message: 'newEmail is required' });
 
   authDb.prepare('UPDATE users SET email=?, updated_at=? WHERE id=?').run(newEmail, Date.now(), req.userId);
 
@@ -494,23 +498,23 @@ router.get('/sessions', requireAuth, (req, res) => {
 
 router.delete('/sessions/:id', requireAuth, (req, res) => {
   const { id } = req.params;
-  if (id === req.sessionID) return res.status(400).json({ error: 'Cannot revoke current session' });
+  if (id === req.sessionID) return formatAuthError(res, 400, { code: 'CANNOT_REVOKE_CURRENT_SESSION', message: 'Cannot revoke current session' });
   const session = authDb.prepare('SELECT id FROM sessions WHERE id = ? AND user_id = ?').get(id, req.userId);
-  if (!session) return res.status(404).json({ error: 'Session not found' });
+  if (!session) return formatAuthError(res, 404, { code: 'SESSION_NOT_FOUND', message: 'Session not found' });
   authDb.prepare('DELETE FROM sessions WHERE id = ?').run(id);
   res.json({ success: true });
 });
 
 // ─── API KEYS ────────────────────────────────────────────────────────────────
 
-router.get('/api-keys', requireAuth, (req, res) => {
+router.get('/api-keys', requireAuth, requireApiKeysEnabled, (req, res) => {
   const keys = authDb.prepare('SELECT id, name, permissions, created_at, last_used FROM api_keys WHERE user_id = ? ORDER BY created_at DESC').all(req.userId);
   res.json({ keys: keys.map(k => ({ ...k, permissions: JSON.parse(k.permissions || '[]') })) });
 });
 
-router.post('/api-keys', requireAuth, async (req, res) => {
+router.post('/api-keys', requireAuth, requireApiKeysEnabled, async (req, res) => {
   const { name, permissions } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name is required' });
+  if (!name) return formatAuthError(res, 400, { code: 'MISSING_NAME', message: 'Name is required' });
 
   const allowed = ['action:read', 'action:write'];
   const validPermissions = (permissions || []).filter(p => allowed.includes(p));
@@ -527,10 +531,10 @@ router.post('/api-keys', requireAuth, async (req, res) => {
   res.status(201).json({ success: true, key: rawKey, metadata: { id: keyId, name, permissions: validPermissions, createdAt: now } });
 });
 
-router.delete('/api-keys/:id', requireAuth, (req, res) => {
+router.delete('/api-keys/:id', requireAuth, requireApiKeysEnabled, (req, res) => {
   const { id } = req.params;
   const key = authDb.prepare('SELECT id FROM api_keys WHERE id = ? AND user_id = ?').get(id, req.userId);
-  if (!key) return res.status(404).json({ error: 'API Key not found' });
+  if (!key) return formatAuthError(res, 404, { code: 'API_KEY_NOT_FOUND', message: 'API Key not found' });
   authDb.prepare('DELETE FROM api_keys WHERE id = ?').run(id);
   res.json({ success: true });
 });
@@ -540,7 +544,7 @@ router.delete('/api-keys/:id', requireAuth, (req, res) => {
 router.post('/password-reset/request', async (req, res) => {
   const { username, email } = req.body;
   const user = authDb.prepare('SELECT * FROM users WHERE username=? OR email=?').get(username || null, email || null);
-  if (!user) return res.status(404).json({ error: 'User not found' });
+  if (!user) return formatAuthError(res, 404, { code: 'USER_NOT_FOUND', message: 'User not found' });
 
   const token = generateResetToken();
   const hash = await bcrypt.hash(token, 10);
@@ -550,9 +554,14 @@ router.post('/password-reset/request', async (req, res) => {
 
   authDb.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)').run(hash, user.id, expiresAt);
 
-  const config = req.app.get('config');
-  if (config?.origin) {
-    fetch(`${config.origin}/api/v1/test/mailbox`, {
+  let publicOrigin;
+  try {
+    publicOrigin = resolveWebAuthnOptions(req).origin;
+  } catch {
+    publicOrigin = req.app.get('config')?.origin;
+  }
+  if (publicOrigin) {
+    fetch(`${publicOrigin}/api/v1/test/mailbox`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'Email', subject: 'Password Reset', body: `Token: ${token}` })
@@ -564,7 +573,7 @@ router.post('/password-reset/request', async (req, res) => {
 
 router.post('/password-reset/reset', async (req, res) => {
   const { token, newPassword } = req.body;
-  if (!token || !newPassword) return res.status(400).json({ error: 'Missing data' });
+  if (!token || !newPassword) return formatAuthError(res, 400, { code: 'MISSING_DATA', message: 'Missing data' });
 
   const tokens = authDb.prepare('SELECT * FROM password_reset_tokens WHERE used=0 AND expires_at > ?').all(Date.now());
   let matchedToken = null;
@@ -572,7 +581,7 @@ router.post('/password-reset/reset', async (req, res) => {
     if (await bcrypt.compare(token, t.token_hash)) { matchedToken = t; break; }
   }
 
-  if (!matchedToken) return res.status(401).json({ error: 'Invalid or expired token' });
+  if (!matchedToken) return formatAuthError(res, 401, { code: 'INVALID_RESET_TOKEN', message: 'Invalid or expired token' });
 
   const hash = await bcrypt.hash(newPassword, 12);
   authDb.prepare('UPDATE users SET password_hash=?, updated_at=? WHERE id=?').run(hash, Date.now(), matchedToken.user_id);
@@ -590,7 +599,7 @@ router.patch('/settings', requireAuth, (req, res) => {
     for (const [key, value] of Object.entries(updates)) { stmt.run(String(value), key); }
     res.json({ success: true });
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    formatAuthError(res, 400, { code: 'SETTINGS_UPDATE_FAILED', message: err.message || 'Settings update failed' });
   }
 });
 
