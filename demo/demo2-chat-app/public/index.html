@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Easy Auth Chat | Multi-Channel Identity Demo</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body class="dark-theme">
+    <div id="app">
+        <!-- Login View -->
+        <div id="login-view" class="view hidden">
+            <div class="auth-card">
+                <h1>Easy Auth Chat</h1>
+                <p>Advanced Identity Platform Demo</p>
+                <form id="login-form">
+                    <input type="text" id="login-identifier" placeholder="Email or Username" required>
+                    <input type="password" id="login-password" placeholder="Password" required>
+                    <button type="submit" class="btn-primary">Login</button>
+                </form>
+                <p class="auth-footer">Don't have an account? <a href="#" onclick="showView('signup-view')">Sign up</a></p>
+            </div>
+        </div>
+
+        <!-- Signup View -->
+        <div id="signup-view" class="view hidden">
+            <div class="auth-card">
+                <h1>Create Account</h1>
+                <form id="signup-form">
+                    <input type="email" id="signup-email" placeholder="Email Address" required>
+                    <input type="text" id="signup-displayname" placeholder="Display Name">
+                    <input type="password" id="signup-password" placeholder="Password" required>
+                    <button type="submit" class="btn-primary">Sign Up</button>
+                </form>
+                <p class="auth-footer">Already have an account? <a href="#" onclick="showView('login-view')">Login</a></p>
+            </div>
+        </div>
+
+        <!-- Verification View -->
+        <div id="verify-view" class="view hidden">
+            <div class="auth-card">
+                <h1>Verification</h1>
+                <p>A code has been sent to your <strong>console</strong> (Demo Mode).</p>
+                <form id="verify-form">
+                    <input type="text" id="verify-code" placeholder="Enter Code" required>
+                    <button type="submit" class="btn-primary">Verify & Finish</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Main Chat View -->
+        <div id="chat-view" class="view hidden">
+            <header class="app-header">
+                <div class="logo">Easy Auth Chat</div>
+                <div class="user-menu">
+                    <span id="user-display-name"></span>
+                    <button id="logout-btn" class="btn-ghost">Logout</button>
+                </div>
+            </header>
+            
+            <div class="main-layout">
+                <aside class="sidebar">
+                    <div class="sidebar-header">
+                        <h3>Rooms</h3>
+                        <button id="create-room-btn" class="btn-icon">+</button>
+                    </div>
+                    <ul id="rooms-list"></ul>
+                </aside>
+                
+                <main class="chat-area">
+                    <div id="chat-header" class="chat-header">
+                        <h2 id="current-room-name">Select a room</h2>
+                        <div id="room-actions" class="hidden">
+                            <button id="show-bots-btn" class="btn-ghost btn-sm">Bots</button>
+                        </div>
+                    </div>
+                    <div id="messages-container" class="messages-container"></div>
+                    <form id="message-form" class="message-form hidden">
+                        <input type="text" id="message-input" placeholder="Type a message..." required>
+                        <button type="submit" class="btn-send">Send</button>
+                    </form>
+                </main>
+
+                <aside id="bots-sidebar" class="bots-sidebar hidden">
+                    <div class="sidebar-header">
+                        <h3>Room Bots</h3>
+                        <button id="close-bots-btn" class="btn-ghost">×</button>
+                    </div>
+                    <div class="bots-content">
+                        <p class="hint">Create a bot API key for this room.</p>
+                        <button id="create-bot-btn" class="btn-primary btn-sm">Create New Bot</button>
+                        <div id="bots-list" class="bots-list"></div>
+                    </div>
+                </aside>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-container" class="modal-container hidden">
+        <div class="modal">
+            <h3 id="modal-title"></h3>
+            <div id="modal-content"></div>
+            <div class="modal-actions">
+                <button id="modal-cancel" class="btn-ghost">Cancel</button>
+                <button id="modal-confirm" class="btn-primary">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="app.js"></script>
+</body>
+</html>
