@@ -1,9 +1,13 @@
 {
-  "name": "express-easy-auth",
-  "version": "2.0.0",
+  "name": "@javagt/express-easy-auth",
+  "version": "2.0.1",
   "description": "Easy authentication library for Express.js supporting TOTP 2FA, passkeys, and user managed API keys",
   "main": "src/server.mjs",
   "type": "module",
+  "exports": {
+    ".": "./src/server.mjs",
+    "./client": "./src/client/EasyAuthClient.mjs"
+  },
   "scripts": {
     "start": "node demo/demo1-color-server-logs/main-server.mjs",
     "dev": "node --watch demo/demo1-color-server-logs/main-server.mjs",
