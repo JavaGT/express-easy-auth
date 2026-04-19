@@ -1,5 +1,5 @@
 import express from 'express';
-import { AuthManager, ConsoleContactAdaptor, SQLiteAdaptor, EasyAuth } from '../../src/router/auth/auth.mjs';
+import { AuthManager, ConsoleContactAdaptor, SQLiteAdaptor, EasyAuth, AuthMiddleware } from '../../src/server.mjs';
 import router_api from './api/main.mjs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -88,14 +88,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Routes
 app.use('/api/v1', router_api);
 
-// Global error handler
+// Global error handler for API
+app.use('/api', AuthMiddleware.errorHandler);
+
+// Fallback error handler
 app.use((err, req, res, next) => {
-    console.error('[SERVER ERROR]', err);
-    const statusCode = err.code || 500;
-    res.status(statusCode).json({
-        error: err.type || 'SERVER_ERROR',
-        message: err.message || 'An unexpected error occurred'
-    });
+    console.error('[FATAL ERROR]', err);
+    res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', message: err.message });
 });
 
 const PORT = 3001;

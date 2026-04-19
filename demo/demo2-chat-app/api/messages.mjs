@@ -5,7 +5,7 @@ const router = Router();
 
 // Send message
 // Uses requireAuthOrApiKey to allow both humans (session) and bots (api_key)
-router.post('/:roomId', (req, res, next) => req.authMiddleware.requireAuthOrApiKey(req, res, next, ['room:send']), async (req, res) => {
+router.post('/:roomId', (req, res, next) => req.authMiddleware.requireAuthOrApiKey(req, res, next, ['room:send']), async (req, res, next) => {
     try {
         const { roomId } = req.params;
         const { body } = req.body;
@@ -26,18 +26,18 @@ router.post('/:roomId', (req, res, next) => req.authMiddleware.requireAuthOrApiK
 
         res.status(201).json({ success: true, messageId });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        next(err);
     }
 });
 
 // List messages
-router.get('/:roomId', (req, res, next) => req.authMiddleware.requireAuthOrApiKey(req, res, next, ['room:read']), async (req, res) => {
+router.get('/:roomId', (req, res, next) => req.authMiddleware.requireAuthOrApiKey(req, res, next, ['room:read']), async (req, res, next) => {
     try {
         const { roomId } = req.params;
         const messages = req.chatDb.prepare('SELECT * FROM messages WHERE room_id = ? ORDER BY sent_at DESC LIMIT 50').all(roomId);
         res.json({ success: true, messages: messages.reverse() });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        next(err);
     }
 });
 

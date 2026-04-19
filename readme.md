@@ -1,17 +1,16 @@
-# Express Auth Service (Library)
+# Express Easy Auth 🛡️
 
-**Express Auth Service** is a modular, professional-grade authentication and session management library for Node.js/Express. It provides a complete identity solution with a focus on modern security (Passkeys) and developer experience.
+**Express Easy Auth** is a professional-grade, SOLID-compliant authentication and identity library for Node.js/Express. It provides a complete, modern security solution with a focus on Passkeys, TOTP, and per-user API keys.
 
-- **🚀 Passkeys (WebAuthn)**: Passwordless biometric authentication (TouchID, FaceID).
-- **🛡️ TOTP 2FA**: Google Authenticator, Authy, and hardware token support.
-- **🔑 API Key Management**: Per-user API keys with granular permissions for programmatic access.
-- **💾 Session Store**: Secure, ACID-compliant SQLite-backed session management.
-- **🔒 Fresh Auth**: Middleware to require recent re-authentication for sensitive actions.
-- **📜 System Logs**: Built-in diagnostics and activity logging.
+- **🚀 Passkeys (WebAuthn)**: Biometric authentication (TouchID, FaceID) as a standard.
+- **🛡️ TOTP 2FA**: Built-in support for Google Authenticator and hardware tokens.
+- **🔑 API Key Management**: Per-user API keys with granular scope permissions.
+- **💾 Session Store**: Secure, SQLite-backed session management that extends `express-session`.
+- **📜 SOLID Architecture**: Service-oriented, decoupled, and easily extensible.
 
 ---
 
-## 🚀 5-Minute Quickstart
+## 🚀 Quickstart (5 Minutes)
 
 ### 1. Install
 ```bash
@@ -19,223 +18,132 @@ npm install @javagt/express-easy-auth
 ```
 
 ### 2. Initialize
+The library uses `AuthManager` to handle logic and `EasyAuth` to wire it into Express.
+
 ```javascript
 import express from 'express';
-import { setupAuth, authRouter } from '@javagt/express-easy-auth';
+import { AuthManager, EasyAuth } from '@javagt/express-easy-auth';
 
 const app = express();
 app.use(express.json());
 
-setupAuth(app, {
-  dataDir: './data',
-  config: { 
-    domain: 'localhost',
-    rpName: 'My Auth App',
+// 1. Configure the core manager
+const authManager = new AuthManager({
+  databasePath: './data/auth.db', // SQLite database path
+  mkdirp: true,                   // Auto-create directories
+  webAuthn: {
+    rpName: 'My Awesome App',
     rpID: 'localhost',
     origin: 'http://localhost:3000'
   }
 });
 
-// Standard mounting pattern
-app.use('/api/v1/auth', authRouter);
+await authManager.init();
+
+// 2. Attach to Express
+const auth = EasyAuth.attach(app, authManager, {
+  basePath: '/auth',
+  session: { secret: 'process.env.SESSION_SECRET' }
+});
+
+// 3. Protect your routes
+app.get('/api/profile', auth.requireAuth, (req, res) => {
+  res.json({ user: req.user });
+});
+
 app.listen(3000);
 ```
 
-### JSON errors (v2+)
-
-Failed API responses use a stable machine-readable shape:
-
-```json
-{
-  "error": {
-    "code": "MISSING_CREDENTIALS",
-    "message": "Human-readable description"
-  }
-}
-```
-
-Branch UIs on `error.code`, not `error.message`. See [CHANGELOG.md](CHANGELOG.md) for migration notes from v1.
-
-### 3. Protect
-```javascript
-import { requireAuth } from '@javagt/express-easy-auth';
-
-app.get('/dashboard', requireAuth, (req, res) => {
-  res.json({ message: `Hello User ${req.userId}` });
-});
-```
-
 ---
 
-## Minimal integration profile
+## 🏗️ Core Architecture
 
-For a small **management plane** (sessions + passkeys + login/logout, optional 2FA), you typically mount the auth router and use session middleware. Core routes:
+### AuthManager
+The `AuthManager` is the brain of the system. It orchestrates various services like `PasswordService`, `WebAuthnService`, and `ApiKeyService`. It is database-agnostic through the `DatabaseAdaptor` pattern.
 
-| Area | Prefix (example) | Notes |
-| :--- | :--- | :--- |
-| Login / logout / status | `POST /login`, `POST /logout`, `GET /status` | Session cookies |
-| Passkeys | `/passkeys/*`, `/passkeys/authenticate/*` | WebAuthn |
-| Sessions | `GET /sessions`, `DELETE /sessions/:id` | List / revoke |
-| Optional 2FA | `/2fa/*` | TOTP |
-| Optional extras | `/api-keys`, `/password-reset/*`, `/settings`, `/report-error` | Omit or disable as needed |
-
-**Threat model / scope:** Turning off user API key CRUD does not remove server-side verification of API keys you issue elsewhere—use `setupAuth({ enableApiKeys: false })` only to hide the built-in key management UI; protect M2M routes with `requireApiKey` when you still use keys.
-
----
-
-## Reverse proxy and WebAuthn (`rpID` / `origin`)
-
-The same app may be reached as `http://127.0.0.1:…` and as `https://app.example.com` behind a proxy. WebAuthn requires `expectedOrigin` and `expectedRPID` to match the browser.
-
-1. Set **`app.set('trust proxy', …)`** so Express sees `X-Forwarded-Proto` / `X-Forwarded-Host` (or your proxy’s equivalents).
-2. Either omit static `config.origin` / `config.rpID` so the library **derives** them from each request, or supply a resolver:
-
-```javascript
-setupAuth(app, {
-  dataDir: './data',
-  config: { rpName: 'My App' },
-  getWebAuthnOptions: (req) => {
-    const host = req.get('host') || '';
-    const origin = `${req.protocol}://${host}`;
-    return {
-      rpName: 'My App',
-      origin,
-      rpID: new URL(origin).hostname
-    };
-  }
-});
-```
-
-`exposeErrors` is configured only via `setupAuth({ exposeErrors })`; it is stored separately and is **not** copied onto `config` (so Proxies/getters on `config` remain usable).
+### EasyAuth Facade
+`EasyAuth.attach()` performs several high-level tasks:
+1. Mounts `express-session` using the `SQLiteSessionStore`.
+2. Registers the identity router at your specified `basePath`.
+3. Automatically serves the frontend SDK at `${basePath}/client.js`.
+4. Adds the `AuthMiddleware.errorHandler` to ensure standardized JSON error responses.
 
 ---
 
 ## 🌐 Frontend SDK
 
-The library hosts its own lightweight SDK at `/auth-sdk.js` (can be customized). No installation required.
+No installation required. `EasyAuth.attach()` serves a modern, lightweight client directly from your server.
 
 ```html
 <script type="module">
-  import { AuthClient } from '/auth-sdk.js';
-  const auth = new AuthClient();
+  import { EasyAuthClient } from '/auth/client.js';
+  const auth = new EasyAuthClient({ apiBase: '/auth' });
+
+  // Login with Passkey
+  const result = await auth.loginWithPasskey(SimpleWebAuthnBrowser);
   
-  // High-level ceremonies
-  await auth.loginWithPasskey();
-  await auth.registerPasskey('My Mac');
-  
-  // Standard methods
-  const status = await auth.getStatus();
+  // Register for 2FA
+  const { qrCode, secret } = await auth.setupTotp();
 </script>
-```
-
----
-
-## 📖 Features & Documentation
-
-### 🛡️ Multi-Factor Auth (TOTP)
-Users can enable TOTP 2FA for an extra layer of security.
-- **Setup**: `POST /api/v1/auth/2fa/setup`
-- **Verify**: `POST /api/v1/auth/2fa/verify-setup`
-- [View Example: TOTP Setup](examples/04-totp-setup.js)
-
-### 🏎️ Passkeys (WebAuthn)
-Full WebAuthn support including discovery and residency.
-- **Integration**: Use `AuthClient.loginWithPasskey()` and `AuthClient.registerPasskey()`.
-- **Discoverable / username-less login**: Call `loginWithPasskey()` with no argument (or omit username). The server then sends an empty `allowCredentials` list so the authenticator can use discoverable credentials.
-- [View Example: Passkey Ceremony](examples/02-passkeys.js)
-
-### 🔑 Programmatic Access (API Keys)
-Allow users to create and manage their own API keys for your service.
-- **Middleware**: Use `requireApiKey` to protect machine-to-machine routes.
-- **Permissions**: Supports `action:read` and `action:write`.
-- **Hiding CRUD**: `setupAuth({ enableApiKeys: false })` returns 404 for `GET/POST/DELETE /api-keys` while `requireApiKey` still validates keys.
-- [View Example: API Key Integration](examples/03-api-keys.js)
-
-### 🔗 Linking to your Application Database
-**Auth-server** is designed to be a standalone identity provider. It does not store application-specific data (like bios or preferences). Instead, you should link your application database to the `userId` provided by the library.
-
-**Pattern:**
-1. Use `requireAuth` to get `req.userId`.
-2. Query your own database using that ID.
-
-[View full example of linking databases](examples/08-external-db-linking.js)
-
-### 📜 Logging & Debugging
-The library provides a flexible logging system and explicit control over error exposure.
-- **`exposeErrors`**: Boolean passed to `setupAuth`; stored on the app (not merged into `config`). Recommended to set to `process.env.NODE_ENV !== 'production'`.
-- **Custom Logger**: Plug in your own logger (e.g., Winston, Pino) by passing it to `setupAuth`.
-- [View Example: Custom Logger](examples/05-custom-logger.js)
-
-### 🌐 SPA Fallback (Modern Alternative to Wildcard Routes)
-When building Single Page Applications (SPAs), avoid using catch-all wildcard routes (e.g., `app.get('*', ...)`) as they can cause routing conflicts and `PathError` in newer versions of Express. 
-
-Instead, use a middleware-based fallback that only triggers for HTML requests:
-```javascript
-app.use((req, res, next) => {
-  if (req.method === 'GET' && req.accepts('html') && !req.path.startsWith('/api')) {
-    res.sendFile(path.join(__dirname, 'public/index.html'));
-  } else {
-    next();
-  }
-});
 ```
 
 ---
 
 ## 📜 API Reference
 
-### Backend API (V1)
-All identity endpoints are nested under the router (recommended path: `/api/v1/auth`).
+All routes are nested under the `basePath` provided to `EasyAuth.attach`.
 
 | Category | Method | Path | Auth | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| **Auth** | POST | `/login` | — | Login with password |
-| | POST | `/register` | — | Create account |
-| | POST | `/logout` | ✓ | Destroy session |
-| | GET | `/status` | — | Check session status |
-| **2FA** | POST | `/2fa/setup` | ✓ | Generate TOTP secret |
-| | POST | `/2fa/verify-setup` | ✓ | Enable 2FA after verification |
-| | POST | `/2fa/disable` | ✓ (Fresh) | Disable TOTP |
-| **Passkeys** | POST | `/passkeys/register/options` | ✓ | Get registration options |
-| | POST | `/passkeys/register/verify` | ✓ | Verify and save passkey |
-| | POST | `/passkeys/authenticate/options` | — | Get login options |
-| | POST | `/passkeys/authenticate/verify` | — | Verify passkey login |
-| | GET | `/passkeys` | ✓ | List registered passkeys |
-| | DELETE | `/passkeys/:id` | ✓ | Delete a passkey |
-| **Account** | POST | `/password/change` | ✓ (Fresh) | Change current password |
-| | POST | `/email/change` | ✓ (Fresh) | Update email address |
-| **Password Reset** | POST | `/password-reset/request` | — | Generate reset token |
-| | POST | `/password-reset/reset` | — | Complete reset |
-| **API Keys** | GET | `/api-keys` | ✓ | List user API keys |
-| | POST | `/api-keys` | ✓ | Create new API key |
-| | DELETE | `/api-keys/:id` | ✓ | Revoke API key |
+| **Auth** | POST | `/login` | — | Login with password/TOTP |
+| | POST | `/register` | — | Create a new account |
+| | POST | `/logout` | ✓ | End the session |
+| | GET | `/me` | ✓ | Get current user profile |
+| **TOTP** | GET | `/totp/status` | ✓ | Check if 2FA is enabled |
+| | POST | `/totp/setup` | ✓ | Generate QR code/secret |
+| | POST | `/totp/verify` | ✓ | Finalize 2FA setup |
+| **Passkeys**| POST | `/passkeys/login/options` | — | WebAuthn challenge |
+| | POST | `/passkeys/login/verify` | — | Finalize Passkey login |
+| | POST | `/passkeys/register/options`| ✓ | Start Passkey enrollment |
+| | GET | `/passkeys` | ✓ | List registered keys |
+| **API Keys**| GET | `/keys` | ✓ | List user API keys |
+| | POST | `/keys` | ✓ | Create a new API key |
+| | DELETE | `/keys/:key` | ✓ | Revoke a key |
+| **Sessions**| GET | `/sessions` | ✓ | List all active sessions |
+| | DELETE | `/sessions/:id`| ✓ | Revoke a specific session |
 
-### Frontend SDK (AuthClient)
-The SDK is available at `/auth-sdk.js`.
-
-#### Methods
-- `client.login(username, password)`: Manual login.
-- `client.register(username, email, password)`: Manual registration.
-- `client.logout()`: Logout.
-- `client.getStatus()`: Get authentication and security status.
-- `client.loginWithPasskey(username?)`: Biometric login; omit `username` for discoverable credentials.
-- `client.registerPasskey(name)`: Register a biometric key.
-- `client.createApiKey(name, permissions)`: Generate a new API key.
-- `client.listApiKeys()`: List keys.
-- `client.reportError(err, context)`: Report client-side errors to server.
-
-## Examples
-The `examples/` directory contains standalone, documented reference implementations. See [examples/README.md](examples/README.md) for how to run them and v2 notes.
-
-1. `01-basic-setup.js`: Minimal Express integration.
-2. `02-passkeys.js`: WebAuthn registration and login.
-3. `03-api-keys.js`: Service-to-service authentication.
-4. `04-totp-setup.js`: TOTP 2FA lifecycle.
-5. `05-custom-logger.js`: Injecting a custom logger.
-6. `06-password-reset.js`: Full password recovery flow.
-7. `08-external-db-linking.js`: Linking to your own application database.
+### Error Format
+All failures return a consistent JSON structure:
+```json
+{
+  "success": false,
+  "error": "INVALID_CREDENTIALS",
+  "message": "The password you entered is incorrect."
+}
+```
 
 ---
 
+## 🛡️ Security Features
+
+### Fresh Auth
+Sensitive operations (like changing passwords or deleting accounts) can be protected by `requireFreshAuth`. This forces the user to provide a password or passkey if their session hasn't been re-verified recently.
+
+```javascript
+app.delete('/account', auth.requireFreshAuth, (req, res) => {
+  // Only reachable if user just re-authenticated
+});
+```
+
+### SQLite Session Store
+Unlike the default memory store, our `SQLiteSessionStore` is persistent across restarts and supports revoking sessions for specific users programmatically.
+
+---
+
+## 🧪 Verification & Examples
+Check the `demo/` directory for full reference implementations:
+1. `demo/demo1-color-server-logs`: Basic setup with API keys.
+2. `demo/demo2-chat-app`: Advanced multi-scoped identity and bots.
+
 ## License
-MIT
+ISC

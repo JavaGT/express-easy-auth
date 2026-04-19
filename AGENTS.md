@@ -38,18 +38,18 @@ To add a new contact method (e.g., Twilio for SMS):
 
 This section tracks technical debt and architectural enhancement ideas discovered during development.
 
-| Area | Improvement Idea | Potential Benefit |
-| :--- | :--- | :--- 
-| **Session** | Implement JWT-based stateless tokens as an option. | Improved scalability for distributed systems. |
-| **Security** | Implement global Rate Limiting middleware. | Protection against brute-force and DDoS. [In Progress] |
-| **Storage** | Implement a modular Challenge store. | Distributed WebAuthn support. [In Progress] |
-| **DX** | Add OpenAPI/Swagger documentation generation. | Automatic, high-fidelity API reference. [In Progress] |
-| **Testing** | Implement a full testing suite for `AuthServices`. | High-confidence refactoring and regression testing. |
+| Area | Improvement Idea | Potential Benefit | Status |
+| :--- | :--- | :--- | :--- |
+| **Session** | Implement JWT-based stateless tokens as an option. | Improved scalability for distributed systems. | Planned |
+| **Security** | Implement global Rate Limiting middleware. | Protection against brute-force and DDoS. | [Done] |
+| **Storage** | Implement a modular Challenge store. | Distributed WebAuthn support. | [Done] |
+| **DX** | Add OpenAPI/Swagger documentation generation. | Automatic, high-fidelity API reference. | [Done] |
+| **Testing** | Implement a full testing suite for `AuthServices`. | High-confidence refactoring and regression testing. | Planned |
 
 ## 🧪 Verification Commands
 
-- **Development**: `npm run dev` (Starts server with hot-reloading).
-- **Smoke Test**: `node scratch/smoke-test.mjs` (Verifies core authentication flows).
+- **Development**: `npm run dev` (Starts server with hot-reloading Demo 1).
+- **Chat Demo**: `npm run dev:chat` (Starts Chat application demo).
 - **Audit**: `npm audit` (Check for dependency vulnerabilities).
 
 ---

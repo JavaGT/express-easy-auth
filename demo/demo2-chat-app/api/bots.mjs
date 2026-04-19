@@ -3,7 +3,7 @@ import { Router } from 'express';
 const router = Router();
 
 // Create bot (API Key) for a room
-router.post('/:roomId', (req, res, next) => req.authMiddleware.requireFreshAuth(req, res, next), async (req, res) => {
+router.post('/:roomId', (req, res, next) => req.authMiddleware.requireFreshAuth(req, res, next), async (req, res, next) => {
     try {
         const { roomId } = req.params;
         const { name } = req.body;
@@ -28,19 +28,19 @@ router.post('/:roomId', (req, res, next) => req.authMiddleware.requireFreshAuth(
             message: 'Save this API key - it will not be shown again!' 
         });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        next(err);
     }
 });
 
 // List bots (API keys)
-router.get('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res) => {
+router.get('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res, next) => {
     try {
         const keys = await req.authManager.getApiKeysByUser(req.user.id);
         // Filter for keys that belong to this demo's bots
         const bots = keys.filter(k => k.name && k.name.startsWith('Bot:'));
         res.json({ success: true, bots });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        next(err);
     }
 });
 

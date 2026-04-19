@@ -1,6 +1,6 @@
 {
   "name": "@javagt/express-easy-auth",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "description": "Easy authentication library for Express.js supporting TOTP 2FA, passkeys, and user managed API keys",
   "main": "src/server.mjs",
   "type": "module",
@@ -31,5 +31,8 @@
     "demo"
   ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "publishConfig": {
+    "access": "public"
+  }
 }

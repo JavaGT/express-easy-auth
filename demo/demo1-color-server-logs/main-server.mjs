@@ -1,5 +1,5 @@
 import express from 'express';
-import { AuthManager, ConsoleContactAdaptor, SQLiteAdaptor, EasyAuth } from '../../src/router/auth/auth.mjs';
+import { AuthManager, ConsoleContactAdaptor, SQLiteAdaptor, EasyAuth } from '../../src/server.mjs';
 import router_api from './api/main.mjs';
 import router_interface from './interface/main.mjs';
 import { fileURLToPath } from 'node:url';

@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 const router = Router();
 
 // Create room
-router.post('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res) => {
+router.post('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res, next) => {
     try {
         const { name } = req.body;
         if (!name) return res.status(400).json({ error: 'Name required' });
@@ -24,12 +24,12 @@ router.post('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, ne
 
         res.status(201).json({ success: true, roomId, name });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        next(err);
     }
 });
 
 // List rooms (rooms user is member of)
-router.get('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res) => {
+router.get('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res, next) => {
     try {
         const rooms = req.chatDb.prepare(`
             SELECT r.*, m.role 
@@ -39,17 +39,17 @@ router.get('/', (req, res, next) => req.authMiddleware.requireAuth(req, res, nex
         `).all(req.user.id);
         res.json({ success: true, rooms });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        next(err);
     }
 });
 
 // Get room members
-router.get('/:id/members', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res) => {
+router.get('/:id/members', (req, res, next) => req.authMiddleware.requireAuth(req, res, next), async (req, res, next) => {
     try {
         const members = req.chatDb.prepare('SELECT user_id, role FROM memberships WHERE room_id = ?').all(req.params.id);
         res.json({ success: true, members });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        next(err);
     }
 });
 

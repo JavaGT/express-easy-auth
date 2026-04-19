@@ -2,7 +2,7 @@ import { Router } from 'express';
 
 const router = Router();
 
-router.post('/server', (req, res, next) => req.authMiddleware.requireAuthOrApiKey(req, res, next), async (req, res) => {
+router.post('/server', (req, res, next) => req.authMiddleware.requireAuthOrApiKey(req, res, next), async (req, res, next) => {
     try {
         const { message, color: requestedColor } = req.body;
         const logMessage = `[API LOG] User ${req.user.email}: ${message}`;
@@ -42,14 +42,8 @@ router.post('/server', (req, res, next) => req.authMiddleware.requireAuthOrApiKe
         } else {
             // Session auth
             if (requestedColor === 'red') {
-                // Use the new middleware-based requirement check
                 return req.authMiddleware.requireFreshAuth(req, res, (err) => {
-                    if (err) {
-                        return res.status(err.code || 401).json({ 
-                            error: err.type || 'UNAUTHORIZED', 
-                            message: err.message 
-                        });
-                    }
+                    if (err) return next(err);
                     console.log(`${colors.red}%s${colors.reset}`, logMessage);
                     res.json({ success: true, logged: 'red' });
                 });
@@ -66,10 +60,7 @@ router.post('/server', (req, res, next) => req.authMiddleware.requireAuthOrApiKe
             res.json({ success: true, logged: 'default' });
         }
     } catch (err) {
-        res.status(err.code || 401).json({ 
-            error: err.type || 'UNAUTHORIZED', 
-            message: err.message 
-        });
+        next(err);
     }
 });
 
