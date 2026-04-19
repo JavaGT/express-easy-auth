@@ -8,6 +8,9 @@ import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const app = express();
+app.use(express.json({ limit: '10kb' }));
+
 // 1. Initialize AuthManager
 const consoleContact = new ConsoleContactAdaptor();
 const authManager = new AuthManager({
@@ -22,8 +25,8 @@ const authManager = new AuthManager({
     },
     // Define Chat permissions taxonomy
     scopes: [
-        { 
-            name: 'room', 
+        {
+            name: 'room',
             children: [
                 { name: 'read' },
                 { name: 'send' },
@@ -37,6 +40,7 @@ await authManager.init();
 
 // 2. Initialize Chat Domain Database
 const chatDbPath = path.join(__dirname, 'data/chat.db');
+fs.mkdirSync(path.dirname(chatDbPath), { recursive: true });
 const chatDb = new DatabaseSync(chatDbPath);
 
 chatDb.exec(`
@@ -62,10 +66,11 @@ chatDb.exec(`
     );
 `);
 
-const app = express();
-
-// 3. Mount Easy Auth
-const authMiddleware = EasyAuth.attach(app, authManager, { basePath: '/auth' });
+// 3. Mount Easy Auth (mounts express-session internally)
+const authMiddleware = EasyAuth.attach(app, authManager, {
+    basePath: '/auth',
+    session: { secret: process.env.SESSION_SECRET || 'chat-demo-secret-change-in-production' }
+});
 
 // Add Rate Limiting to auth routes
 app.use('/auth', authMiddleware.rateLimit({ max: 5, windowMs: 60000 }));
@@ -78,7 +83,6 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.json({ limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Routes

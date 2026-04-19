@@ -6,9 +6,6 @@ import { ERROR, AuthError } from './util/errors.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-/**
- * Helper to wrap async route handlers and catch errors.
- */
 const wrap = (fn) => (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch(next);
 };
@@ -25,13 +22,24 @@ function extractWebAuthnConfig(req) {
     return { origin, rpID };
 }
 
+/** Populate the express-session after successful authentication. */
+function populateSession(req, user, scopes = [], roles = []) {
+    req.session.userId = user.id;
+    req.session.lastAuthenticatedAt = Date.now();
+    req.session.scopes = scopes;
+    req.session.roles = roles;
+    return new Promise((resolve, reject) =>
+        req.session.save((err) => err ? reject(err) : resolve())
+    );
+}
+
 export default function authRoutes(authManager) {
     const router = Router();
     const middleware = new AuthMiddleware(authManager);
 
     // Health check / Info
     router.get('/', (req, res) => {
-        res.json({ name: 'Express Easy Auth API', version: '1.0.0' });
+        res.json({ name: 'Express Easy Auth API', version: '2.0.0' });
     });
 
     // Serve Client Library
@@ -58,13 +66,13 @@ export default function authRoutes(authManager) {
         const identifier = email || userIdentifier;
         const totpCode = totp || code;
 
-        const authResult = await authManager.authenticateLogin(identifier, password, totpCode);
-        res.json({ success: true, ...authResult });
+        const { user, scopes, roles } = await authManager.authenticateLogin(identifier, password, totpCode);
+        await populateSession(req, user, scopes, roles);
+        res.json({ success: true, user });
     }));
 
     router.post('/logout', middleware.requireAuth, wrap(async (req, res) => {
-        await authManager.logout(req.sessionToken);
-        res.json({ success: true });
+        req.session.destroy(() => res.json({ success: true }));
     }));
 
     // --- Identity Info ---
@@ -82,7 +90,9 @@ export default function authRoutes(authManager) {
     });
 
     router.delete('/account', middleware.requireFreshAuth, wrap(async (req, res) => {
-        await authManager.deleteUser(req.user.id);
+        const userId = req.user.id;
+        await new Promise((resolve) => req.session.destroy(resolve));
+        await authManager.deleteUser(userId);
         res.json({ success: true });
     }));
 
@@ -144,8 +154,9 @@ export default function authRoutes(authManager) {
         const reqConfig = extractWebAuthnConfig(req);
         const { response, tempId } = req.body;
         const expectedChallenge = await authManager.getChallenge('login_' + tempId);
-        const authResult = await authManager.verifyAuthentication(response, expectedChallenge, reqConfig);
-        res.json({ success: true, ...authResult, lastAuthenticatedAt: Date.now() });
+        const { user, scopes, roles } = await authManager.verifyAuthentication(response, expectedChallenge, reqConfig);
+        await populateSession(req, user, scopes, roles);
+        res.json({ success: true, user });
     }));
 
     router.post('/passkeys/verify/options', middleware.requireAuth, wrap(async (req, res) => {
@@ -159,8 +170,10 @@ export default function authRoutes(authManager) {
         const reqConfig = extractWebAuthnConfig(req);
         const response = req.body;
         const expectedChallenge = await authManager.getChallenge('verify_' + req.user.id);
-        const authResult = await authManager.verifyAuthenticationForStepUp(response, expectedChallenge, req.sessionToken, reqConfig);
-        res.json(authResult);
+        const result = await authManager.verifyAuthenticationForStepUp(response, expectedChallenge, reqConfig);
+        req.session.lastAuthenticatedAt = Date.now();
+        await new Promise((resolve, reject) => req.session.save((err) => err ? reject(err) : resolve()));
+        res.json(result);
     }));
 
     router.get('/passkeys', middleware.requireAuth, wrap(async (req, res) => {
@@ -210,10 +223,9 @@ export default function authRoutes(authManager) {
 
     router.post('/password-reset/request', wrap(async (req, res) => {
         const { identifier, email } = req.body;
-        // Always return success to prevent user enumeration
         try {
             await authManager.requestPasswordReset(identifier || email);
-        } catch (err) {}
+        } catch (_) {}
         res.json({ success: true });
     }));
 
@@ -250,32 +262,38 @@ export default function authRoutes(authManager) {
     // --- Session Management ---
 
     router.get('/sessions', middleware.requireAuth, wrap(async (req, res) => {
-        const sessions = await authManager.getUserSessions(req.user.id);
+        const sessions = await new Promise((resolve, reject) =>
+            req.sessionStore.getAllByUserId(req.user.id, (err, rows) => err ? reject(err) : resolve(rows))
+        );
         const annotated = sessions.map(s => ({
             ...s,
-            isCurrent: s.session_token === req.sessionToken
+            isCurrent: s.sid === req.sessionID
         }));
         res.json({ success: true, sessions: annotated });
     }));
 
     router.delete('/sessions/:sessionId', middleware.requireAuth, wrap(async (req, res) => {
         const { sessionId } = req.params;
-        const sessions = await authManager.getUserSessions(req.user.id);
-        const target = sessions.find(s => String(s.id) === sessionId);
-        
+
+        if (sessionId === req.sessionID) {
+            const err = new AuthError(ERROR.invalid_session, 'Cannot revoke your current session. Use /logout instead.');
+            err.code = 400;
+            throw err;
+        }
+
+        const sessions = await new Promise((resolve, reject) =>
+            req.sessionStore.getAllByUserId(req.user.id, (err, rows) => err ? reject(err) : resolve(rows))
+        );
+        const target = sessions.find(s => s.sid === sessionId);
         if (!target) {
             const err = new AuthError(ERROR.invalid_session, 'Session not found');
             err.code = 404;
             throw err;
         }
-        
-        if (target.session_token === req.sessionToken) {
-            const err = new AuthError(ERROR.invalid_session, 'Cannot revoke your current session. Use /logout instead.');
-            err.code = 400;
-            throw err;
-        }
-        
-        await authManager.revokeSession(req.user.id, target.id);
+
+        await new Promise((resolve, reject) =>
+            req.sessionStore.destroy(sessionId, (err) => err ? reject(err) : resolve())
+        );
         res.json({ success: true });
     }));
 
@@ -283,4 +301,3 @@ export default function authRoutes(authManager) {
 
     return router;
 }
-

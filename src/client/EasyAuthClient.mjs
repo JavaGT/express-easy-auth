@@ -1,6 +1,7 @@
 /**
  * EasyAuthClient - A modern JavaScript client for the Express Easy Auth API.
- * Handles sessions, TOTP, and WebAuthn flows with a clean, throw-based error model.
+ * Sessions are managed via httpOnly cookies — no token storage required.
+ * Handles TOTP and WebAuthn flows with a clean, throw-based error model.
  */
 export class EasyAuthClient {
     constructor(options = {}) {
@@ -10,9 +11,8 @@ export class EasyAuthClient {
                 `Use: new EasyAuthClient({ apiBase: '${options}' })`
             );
         }
-        const { apiBase = '/api/v1/auth', sessionToken = null } = options;
+        const { apiBase = '/auth' } = options;
         this.apiBase = apiBase;
-        this.sessionToken = sessionToken || localStorage.getItem('auth_session_token');
         this.user = JSON.parse(localStorage.getItem('auth_user') || 'null');
     }
 
@@ -26,15 +26,14 @@ export class EasyAuthClient {
 
     async login(email, password, totpCode) {
         const result = await this._post('/login', { email, password, code: totpCode });
-        this._setSession(result);
+        this.user = result.user ?? null;
+        this._saveLocal();
         return result;
     }
 
     async logout() {
         try {
-            if (this.sessionToken) {
-                await this._post('/logout', {});
-            }
+            await this._post('/logout', {});
         } finally {
             this._clearSession();
         }
@@ -42,7 +41,7 @@ export class EasyAuthClient {
 
     async me() {
         const result = await this._get('/me');
-        this.user = result.user;
+        this.user = result.user ?? null;
         this._saveLocal();
         return result;
     }
@@ -80,24 +79,21 @@ export class EasyAuthClient {
     async loginWithPasskey(SimpleWebAuthnBrowser) {
         const options = await this._post('/passkeys/login/options', {});
         const assertion = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
-        
+
         const result = await this._post('/passkeys/login/verify', {
             response: assertion,
             tempId: options.tempId
         });
 
-        this._setSession(result);
+        this.user = result.user ?? null;
+        this._saveLocal();
         return result;
     }
 
     async reauthWithPasskey(SimpleWebAuthnBrowser) {
         const options = await this._post('/passkeys/verify/options', {});
         const assertion = await SimpleWebAuthnBrowser.startAuthentication({ optionsJSON: options });
-        
-        const result = await this._post('/passkeys/verify/verify', assertion);
-        this.lastAuthenticatedAt = result.lastAuthenticatedAt;
-        this._saveLocal();
-        return result;
+        return this._post('/passkeys/verify/verify', assertion);
     }
 
     async getPasskeys() {
@@ -138,22 +134,12 @@ export class EasyAuthClient {
 
     // --- Private Helpers ---
 
-    _setSession(authData) {
-        this.sessionToken = authData.sessionToken;
-        this.user = authData.user;
-        this.lastAuthenticatedAt = authData.lastAuthenticatedAt;
-        this._saveLocal();
-    }
-
     _clearSession() {
-        this.sessionToken = null;
         this.user = null;
-        localStorage.removeItem('auth_session_token');
         localStorage.removeItem('auth_user');
     }
 
     _saveLocal() {
-        localStorage.setItem('auth_session_token', this.sessionToken || '');
         localStorage.setItem('auth_user', JSON.stringify(this.user));
     }
 
@@ -174,17 +160,14 @@ export class EasyAuthClient {
             ...(options.headers || {})
         };
 
-        if (this.sessionToken) {
-            headers['Authorization'] = `Bearer ${this.sessionToken}`;
-        }
-
         const response = await fetch(`${this.apiBase}${path}`, {
+            credentials: 'same-origin',
             ...options,
             headers
         });
 
         const data = await response.json();
-            
+
         if (!response.ok) {
             const error = new Error(data.message || data.error || `HTTP Error ${response.status}`);
             error.code = response.status;
@@ -192,7 +175,7 @@ export class EasyAuthClient {
             error.errors = data.errors || [];
             throw error;
         }
-            
+
         return data;
     }
 }

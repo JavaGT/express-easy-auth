@@ -17,7 +17,7 @@ export class AuthMiddleware {
         this.requireAuthOrApiKey = this.requireAuthOrApiKey.bind(this);
         this.requireFreshAuth = this.requireFreshAuth.bind(this);
         this.rateLimit = this.rateLimit.bind(this);
-        
+
         this.#rateLimitStore = new Map();
     }
 
@@ -28,7 +28,7 @@ export class AuthMiddleware {
      */
     async useApiKey(req, res, next) {
         const apiKey = req.headers['x-api-key'] || req.query?.apiKey || req.body?.apiKey;
-        
+
         if (!apiKey) {
             return next(new AuthError(ERROR.api_key_required));
         }
@@ -45,26 +45,21 @@ export class AuthMiddleware {
     }
 
     /**
-     * Middleware to require a valid session (Bearer token).
+     * Middleware to require a valid session (cookie-based via express-session).
      */
     async requireAuth(req, res, next) {
-        const authHeader = req.headers.authorization;
-        const sessionToken = authHeader?.startsWith('Bearer ') 
-            ? authHeader.substring(7) 
-            : req.query?.session || req.body?.session;
-
-        if (!sessionToken) {
+        if (!req.session?.userId) {
             return next(new AuthError(ERROR.invalid_session));
         }
 
         try {
-            const sessionData = await this.#authManager.validateSession(sessionToken);
-            
-            req.user = sessionData.user;
-            req.sessionToken = sessionData.sessionToken;
-            req.lastAuthenticatedAt = sessionData.lastAuthenticatedAt;
-            req.scopes = sessionData.scopes || [];
-            req.roles = sessionData.roles || [];
+            const user = await this.#authManager.getUserById(req.session.userId);
+            if (!user) return next(new AuthError(ERROR.invalid_session));
+
+            req.user = { id: user.id, email: user.email, display_name: user.display_name };
+            req.lastAuthenticatedAt = req.session.lastAuthenticatedAt ?? 0;
+            req.scopes = req.session.scopes ?? [];
+            req.roles = req.session.roles ?? [];
             req.authType = 'session';
             next();
         } catch (err) {
@@ -76,27 +71,22 @@ export class AuthMiddleware {
      * Middleware to allow either session or API key.
      */
     async requireAuthOrApiKey(req, res, next) {
-        const authHeader = req.headers.authorization;
-        const sessionToken = authHeader?.startsWith('Bearer ') 
-            ? authHeader.substring(7) 
-            : req.query?.session || req.body?.session;
-
-        if (sessionToken) {
+        if (req.session?.userId) {
             try {
-                // Try session auth first
-                const sessionData = await this.#authManager.validateSession(sessionToken);
-                req.user = sessionData.user;
-                req.sessionToken = sessionData.sessionToken;
-                req.lastAuthenticatedAt = sessionData.lastAuthenticatedAt;
-                req.authType = 'session';
-                return next();
-            } catch (err) {
-                // Continue to check API key if session fails
-            }
+                const user = await this.#authManager.getUserById(req.session.userId);
+                if (user) {
+                    req.user = { id: user.id, email: user.email, display_name: user.display_name };
+                    req.lastAuthenticatedAt = req.session.lastAuthenticatedAt ?? 0;
+                    req.scopes = req.session.scopes ?? [];
+                    req.roles = req.session.roles ?? [];
+                    req.authType = 'session';
+                    return next();
+                }
+            } catch (_) {}
         }
 
         const apiKey = req.headers['x-api-key'] || req.query?.apiKey || req.body?.apiKey;
-        
+
         if (apiKey) {
             try {
                 const authData = await this.#authManager.authenticateApiKey(apiKey);
@@ -105,9 +95,7 @@ export class AuthMiddleware {
                 req.keyName = authData.name;
                 req.authType = 'api_key';
                 return next();
-            } catch (err) {
-                // Return error if API key also fails
-            }
+            } catch (_) {}
         }
 
         next(new AuthError(ERROR.invalid_session));
@@ -120,18 +108,17 @@ export class AuthMiddleware {
         if (req.authType === 'api_key') {
             return next(new AuthError(ERROR.session_expired));
         }
-        
-        // Use requireAuth to establish baseline authentication
+
         await this.requireAuth(req, res, (err) => {
             if (err) return next(err);
-            
+
             const FRESHNESS_WINDOW = 5 * 60 * 1000; // 5 minutes
             const timeSinceAuth = Date.now() - req.lastAuthenticatedAt;
-            
+
             if (timeSinceAuth > FRESHNESS_WINDOW) {
                 return next(new AuthError(ERROR.session_step_up_required));
             }
-            
+
             next();
         });
     }
@@ -150,7 +137,7 @@ export class AuthMiddleware {
         return (req, res, next) => {
             const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
             const now = Date.now();
-            
+
             if (!this.#rateLimitStore.has(ip)) {
                 this.#rateLimitStore.set(ip, { count: 1, resetTime: now + windowMs });
                 return next();
@@ -180,19 +167,13 @@ export class AuthMiddleware {
 
     /**
      * Unified error handling middleware for Express.
-     * Processes AuthErrors, MultiErrors, and standard JS Errors into a
-     * consistent JSON response format.
      */
     static errorHandler(err, req, res, next) {
         const { status, body } = AuthMiddleware.processError(err);
         res.status(status).json(body);
     }
 
-    /**
-     * Helper to convert various error types into an HTTP status and JSON body.
-     */
     static processError(err) {
-        // MultiError (Collection of validation/auth errors)
         if (err instanceof MultiError) {
             return {
                 status: 400,
@@ -204,7 +185,6 @@ export class AuthMiddleware {
             };
         }
 
-        // AuthError/ValidationError (Single domain error with code/message)
         if (err.toJSON) {
             const json = err.toJSON();
             return {
@@ -213,7 +193,6 @@ export class AuthMiddleware {
             };
         }
 
-        // Generic Error
         const status = typeof err.code === 'number' ? err.code : 500;
         return {
             status,
@@ -225,4 +204,3 @@ export class AuthMiddleware {
         };
     }
 }
-

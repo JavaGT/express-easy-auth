@@ -1,6 +1,7 @@
 /**
  * Easy Auth Chat - Frontend App
  * Demonstrates EasyAuthClient integration within a multi-channel SPA.
+ * Sessions are managed via httpOnly cookies — no token handling required.
  */
 
 import { EasyAuthClient } from '/auth/client.js';
@@ -21,8 +22,7 @@ const state = {
 function showView(viewId) {
     views.forEach(v => document.getElementById(v).classList.add('hidden'));
     document.getElementById(viewId).classList.remove('hidden');
-    
-    // Cleanup polling if leaving chat
+
     if (viewId !== 'chat-view' && pollInterval) {
         clearInterval(pollInterval);
         pollInterval = null;
@@ -68,6 +68,7 @@ document.getElementById('signup-form').onsubmit = async (e) => {
     try {
         const result = await fetch('/auth/register', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password, displayName })
         });
@@ -84,9 +85,6 @@ document.getElementById('signup-form').onsubmit = async (e) => {
 
 document.getElementById('verify-form').onsubmit = async (e) => {
     e.preventDefault();
-    const code = document.getElementById('verify-code').value;
-    // In a real app, you'd call a verification endpoint.
-    // In this demo, verifying means just logging in now that the account is created.
     alert('Account verified! Please login.');
     showView('login-view');
 };
@@ -99,9 +97,7 @@ document.getElementById('logout-btn').onclick = async () => {
 // -- Chat Logic --
 async function loadRooms() {
     try {
-        const res = await fetch('/api/v1/rooms', {
-            headers: { 'Authorization': `Bearer ${client.sessionToken}` }
-        });
+        const res = await fetch('/api/v1/rooms', { credentials: 'same-origin' });
         const data = await res.json();
         state.rooms = data.rooms || [];
         renderRooms();
@@ -129,7 +125,7 @@ function selectRoom(room) {
     document.getElementById('message-form').classList.remove('hidden');
     renderRooms();
     loadMessages();
-    
+
     if (pollInterval) clearInterval(pollInterval);
     pollInterval = setInterval(loadMessages, 2000);
 }
@@ -137,13 +133,10 @@ function selectRoom(room) {
 async function loadMessages() {
     if (!currentRoom) return;
     try {
-        const res = await fetch(`/api/v1/messages/${currentRoom.id}`, {
-            headers: { 'Authorization': `Bearer ${client.sessionToken}` }
-        });
+        const res = await fetch(`/api/v1/messages/${currentRoom.id}`, { credentials: 'same-origin' });
         const data = await res.json();
         const messages = data.messages || [];
-        
-        // Only re-render if count changed
+
         if (messages.length !== state.messages.length) {
             state.messages = messages;
             renderMessages();
@@ -177,10 +170,8 @@ document.getElementById('message-form').onsubmit = async (e) => {
     try {
         const res = await fetch(`/api/v1/messages/${currentRoom.id}`, {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${client.sessionToken}`
-            },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ body })
         });
         if (res.ok) {
@@ -201,10 +192,8 @@ document.getElementById('create-room-btn').onclick = () => {
         if (!name) return;
         const res = await fetch('/api/v1/rooms', {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${client.sessionToken}`
-            },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name })
         });
         const data = await res.json();
@@ -227,9 +216,7 @@ document.getElementById('close-bots-btn').onclick = () => {
 
 async function loadBots() {
     try {
-        const res = await fetch('/api/v1/bots', {
-            headers: { 'Authorization': `Bearer ${client.sessionToken}` }
-        });
+        const res = await fetch('/api/v1/bots', { credentials: 'same-origin' });
         const data = await res.json();
         const list = document.getElementById('bots-list');
         list.innerHTML = '';
@@ -252,15 +239,12 @@ document.getElementById('create-bot-btn').onclick = () => {
         try {
             const res = await fetch(`/api/v1/bots/${currentRoom.id}`, {
                 method: 'POST',
-                headers: { 
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${client.sessionToken}`
-                },
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
             });
             const data = await res.json();
-            
-            // If using older version where user is returned vs object in error
+
             if (res.status === 401 && (data.error === 'FRESH_AUTH_REQUIRED' || data.error?.type === 'FRESH_AUTH_REQUIRED')) {
                 alert('Account protection active: Please logout and login again to create a bot (Step-up auth sim).');
                 return;
@@ -286,10 +270,10 @@ function showModal(title, content, onConfirm, singleAction = false) {
     document.getElementById('modal-title').textContent = title;
     document.getElementById('modal-content').innerHTML = content;
     document.getElementById('modal-container').classList.remove('hidden');
-    
+
     const confirmBtn = document.getElementById('modal-confirm');
     const cancelBtn = document.getElementById('modal-cancel');
-    
+
     confirmBtn.onclick = onConfirm;
     if (singleAction) {
         cancelBtn.classList.add('hidden');

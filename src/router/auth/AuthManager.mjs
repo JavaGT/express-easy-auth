@@ -4,7 +4,6 @@ import { MultiError, ERROR, AuthError } from './util/index.mjs';
 import {
     ContactRequirementChecker,
     AuthenticationValidator,
-    SessionManager,
     ApiKeyService,
     WebAuthnService,
     TotpService,
@@ -22,7 +21,6 @@ export class AuthManager {
     #contactAdaptors;
     #requirementChecker;
     #authValidator;
-    #sessionManager;
     #apiKeyService;
     #webAuthnService;
     #totpService;
@@ -30,19 +28,16 @@ export class AuthManager {
 
     constructor(config = {}) {
         this.#config = config;
-        
-        // Dependency Injection for adaptors
-        this.#databaseAdapter = config.databaseAdapter?.init 
-            ? config.databaseAdapter 
+
+        this.#databaseAdapter = config.databaseAdapter?.init
+            ? config.databaseAdapter
             : new (config.databaseAdapter || SQLiteAdaptor)(config);
-            
+
         this.#contactAdaptors = config.contactAdaptors || [new ConsoleContactAdaptor(this)];
-        
-        // Dependency Injection for services
+
         const { services = {} } = config;
         this.#requirementChecker = services.requirementChecker || new ContactRequirementChecker(this.#databaseAdapter);
         this.#authValidator = services.authValidator || new AuthenticationValidator(this.#databaseAdapter);
-        this.#sessionManager = services.sessionManager || new SessionManager(this.#databaseAdapter);
         this.#apiKeyService = services.apiKeyService || new ApiKeyService(this.#databaseAdapter);
         this.#webAuthnService = services.webAuthnService || new WebAuthnService(this.#databaseAdapter, config.webAuthn);
         this.#totpService = services.totpService || new TotpService();
@@ -53,19 +48,19 @@ export class AuthManager {
 
     #bindMethods() {
         const methods = [
-            'registerUser', 'deleteUser', 'generateRegistrationOptions', 'verifyRegistration',
+            'registerUser', 'deleteUser', 'getUserById',
+            'generateRegistrationOptions', 'verifyRegistration',
             'generateAuthenticationOptions', 'verifyAuthentication', 'verifyAuthenticationForStepUp',
             'getPasskeys', 'updatePasskeyName', 'deletePasskey', 'createApiKey',
             'getApiKeysByUser', 'revokeApiKey', 'updateApiKeyScopes', 'setChallenge', 'getChallenge',
             'generateTotpSetup', 'verifyAndEnableTotp', 'disableTotp', 'getTotpStatus',
-            'authenticateLogin', 'authenticateApiKey', 'validateSession', 'logout', 'init', 'destroy',
+            'authenticateLogin', 'authenticateApiKey', 'init', 'destroy',
             'getScopeTaxonomy',
             'requestPasswordReset', 'resetPassword', 'changePassword',
             'addUserIdentifier', 'removeUserIdentifier', 'getIdentifiers',
-            'getUserSessions', 'revokeSession',
             'verifyEmail'
         ];
-        
+
         for (const method of methods) {
             if (typeof this[method] === 'function') {
                 this[method] = this[method].bind(this);
@@ -85,8 +80,7 @@ export class AuthManager {
         await this.#validateLoginRequirements(authConfig, validation.totpCode, validation.loginCode);
         await this.#verifyAuthCredentials(authConfig, userPassword, validation.totpCode, validation.loginCode);
 
-        const sessionData = await this.#sessionManager.createSession(authConfig);
-        return this.#buildLoginResponse(authConfig, sessionData);
+        return this.#buildLoginResponse(authConfig);
     }
 
     async #validateLoginInputs(userIdentifier, userPassword, totpCode, loginCode) {
@@ -107,13 +101,12 @@ export class AuthManager {
         const { LoginValidationService } = await import('./services/LoginValidationService.mjs');
         const validationService = new LoginValidationService();
         const errors = validationService.validateLoginRequirements(authConfig, totpCode, loginCode);
-        
+
         if (errors.count > 0) throw errors;
     }
 
     async #verifyAuthCredentials(authConfig, password, totpCode, loginCode) {
         const errors = new MultiError();
-        const { userId } = authConfig;
 
         await Promise.all([
             this.#authValidator.verifyPassword(authConfig.email, password, errors),
@@ -124,10 +117,11 @@ export class AuthManager {
         if (errors.count > 0) throw errors;
     }
 
-    #buildLoginResponse(authConfig, sessionData) {
+    #buildLoginResponse(authConfig) {
         return {
             user: { id: authConfig.userId, email: authConfig.email },
-            ...sessionData
+            scopes: [],
+            roles: []
         };
     }
 
@@ -135,24 +129,14 @@ export class AuthManager {
         return await this.#apiKeyService.validateApiKey(apiKey);
     }
 
-    async logout(sessionToken) {
-        await this.#sessionManager.destroySession(sessionToken);
-    }
-
     async destroy() {
         await this.#databaseAdapter.destroy();
     }
 
-    /**
-     * Register a new user.
-     *
-     * When `requireEmailVerification: true` is set in config, the user is
-     * created normally but a signed token is generated and sent via the first
-     * ContactAdaptor. The user's email identifier will remain unverified
-     * (verified_at = NULL) until `verifyEmail(token)` is called.
-     *
-     * @returns {number} The new user's ID.
-     */
+    async getUserById(userId) {
+        return await this.#databaseAdapter.getUserById(userId);
+    }
+
     async registerUser(email, password, displayName) {
         PasswordService.validateStrength(password);
         const passwordHash = await PasswordService.hash(password);
@@ -169,7 +153,7 @@ export class AuthManager {
         const { randomBytes, createHash } = await import('node:crypto');
         const token = randomBytes(32).toString('hex');
         const tokenHash = createHash('sha256').update(token).digest('hex');
-        const expiresAt = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+        const expiresAt = Date.now() + 24 * 60 * 60 * 1000;
 
         await this.#databaseAdapter.createVerificationToken(userId, tokenHash, expiresAt);
 
@@ -177,13 +161,6 @@ export class AuthManager {
         await adaptor.sendUserSignupCode({ id: userId, email }, token);
     }
 
-    /**
-     * Verify an email address using a token delivered via ContactAdaptor.
-     * Marks the user's primary email identifier as verified.
-     *
-     * @param {string} token - The plaintext token from the signup email.
-     * @throws {AuthError} If the token is invalid or expired.
-     */
     async verifyEmail(token) {
         const { createHash } = await import('node:crypto');
         const tokenHash = createHash('sha256').update(token).digest('hex');
@@ -201,7 +178,6 @@ export class AuthManager {
         return await this.#databaseAdapter.deleteUser(userId);
     }
 
-    // WebAuthn Methods
     async generateRegistrationOptions(user, webAuthnReqConfig = {}) {
         return await this.#webAuthnService.generateRegistrationOptions(user, webAuthnReqConfig);
     }
@@ -218,33 +194,22 @@ export class AuthManager {
         const result = await this.#webAuthnService.verifyAuthentication(authenticationResponse, expectedChallenge, webAuthnReqConfig);
         if (result.verified) {
             const user = await this.#databaseAdapter.getUserById(result.userId);
-            const sessionData = await this.#sessionManager.createSession({ userId: user.id, email: user.email });
             return {
-                user: {
-                    id: user.id,
-                    email: user.email,
-                    display_name: user.display_name
-                },
-                ...sessionData
+                user: { id: user.id, email: user.email, display_name: user.display_name },
+                scopes: [],
+                roles: []
             };
         }
         throw new AuthError(ERROR.invalid_credentials);
     }
 
-    async verifyAuthenticationForStepUp(authenticationResponse, expectedChallenge, currentSessionToken, webAuthnReqConfig = {}) {
+    async verifyAuthenticationForStepUp(authenticationResponse, expectedChallenge, webAuthnReqConfig = {}) {
         const result = await this.#webAuthnService.verifyAuthentication(authenticationResponse, expectedChallenge, webAuthnReqConfig);
         if (result.verified) {
-            const now = Date.now();
-            await this.#databaseAdapter.updateSessionLastAuthenticatedAt(currentSessionToken, now);
             const user = await this.#databaseAdapter.getUserById(result.userId);
             return {
                 success: true,
-                user: {
-                    id: user.id,
-                    email: user.email,
-                    display_name: user.display_name
-                },
-                lastAuthenticatedAt: now
+                user: { id: user.id, email: user.email, display_name: user.display_name }
             };
         }
         throw new AuthError(ERROR.invalid_credentials);
@@ -262,17 +227,14 @@ export class AuthManager {
         return await this.#databaseAdapter.deleteAuthenticator(credentialId, userId);
     }
 
-    // API Key management
     async createApiKey(userId, scopes, expiresAt, name) {
-        // 1. Validate taxonomy first
         if (this.#config.scopes && !ScopeValidator.isValidTaxonomy(scopes, this.#config.scopes)) {
             const unknown = scopes.filter(s => !this.#config.scopes.includes(s) && s !== '*');
             throw new ValidationError(ERROR.invalid_scope, `Unknown scopes: ${unknown.join(', ')}`);
         }
 
-        // 2. Enforce inheritance
         const userScopes = await this.#getUserScopes(userId);
-        
+
         if (!ScopeValidator.isSubset(scopes, userScopes)) {
             const unauthorized = scopes.filter(s => !userScopes.includes(s) && !userScopes.includes('*'));
             throw new ValidationError(ERROR.scope_exceeds_user_authority, `Cannot grant scopes you do not possess: ${unauthorized.join(', ')}`);
@@ -284,24 +246,19 @@ export class AuthManager {
     }
 
     async #getUserScopes(userId) {
-        // 1. Fetch user roles from DB
         const userRoles = await this.#databaseAdapter.getUserRoles(userId);
         const roleNames = userRoles.map(r => r.name);
-        
-        // 2. Fetch from config-defined roles
-        let flatScopes = [];
-        
-        // Add default role if none assigned and configured
+
         if (roleNames.length === 0 && this.#config.defaultRole) {
             roleNames.push(this.#config.defaultRole);
         }
 
+        let flatScopes = [];
         for (const roleName of roleNames) {
             const roleScopes = this.#config.roles?.[roleName] || [];
             flatScopes.push(...roleScopes);
         }
 
-        // 3. Resolve wildcards against taxonomy
         if (this.#config.scopes) {
             return ScopeValidator.expand(flatScopes, this.#config.scopes);
         }
@@ -325,36 +282,10 @@ export class AuthManager {
         return 'sk_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
     }
 
-    /**
-     * Internal method to validate a session token.
-     * Used by AuthMiddleware to verify user access.
-     */
-    async validateSession(sessionToken) {
-        const sessionData = await this.#sessionManager.validateSession(sessionToken);
-        
-        // Augment with scopes and roles
-        const userId = sessionData.user.id;
-        const userRoles = await this.#databaseAdapter.getUserRoles(userId);
-        const roleNames = userRoles.map(r => r.name);
-        
-        if (roleNames.length === 0 && this.#config.defaultRole) {
-            roleNames.push(this.#config.defaultRole);
-        }
-
-        const scopes = await this.#getUserScopes(userId);
-
-        return {
-            ...sessionData,
-            roles: roleNames,
-            scopes: scopes
-        };
-    }
-
     getScopeTaxonomy() {
         return this.#config.scopes || [];
     }
 
-    // Challenge Management (for WebAuthn)
     async setChallenge(key, challenge, ttlMs = 60000) {
         await this.#challengeStore.set(key, challenge, ttlMs);
     }
@@ -363,25 +294,14 @@ export class AuthManager {
         return await this.#challengeStore.consumeChallenge(key);
     }
 
-    // TOTP Methods
     async generateTotpSetup(userId) {
-        console.log('[AuthManager] generateTotpSetup starting for userId:', userId);
         const user = await this.#databaseAdapter.getUserById(userId);
-        if (!user) {
-            console.error('[AuthManager] generateTotpSetup error: User not found');
-            throw new AuthError(ERROR.user_not_found);
-        }
+        if (!user) throw new AuthError(ERROR.user_not_found);
 
-        console.log('[AuthManager] generateTotpSetup: Generating secret for', user.email);
         const secret = await this.#totpService.generateSecret();
-        
-        console.log('[AuthManager] generateTotpSetup: Generating otpauth URL');
         const url = await this.#totpService.generateOtpauthUrl(user.email, secret);
-        
-        console.log('[AuthManager] generateTotpSetup: Generating QR Code');
         const qrCode = await this.#totpService.generateQrCode(url);
 
-        console.log('[AuthManager] generateTotpSetup: Setup complete');
         return { secret, qrCode };
     }
 
@@ -408,28 +328,20 @@ export class AuthManager {
         };
     }
 
-    // ── Password Reset ──────────────────────────────────────────────────────
-
-    /**
-     * Initiates a password reset. Always resolves successfully even if the
-     * identifier is not found, to prevent user enumeration.
-     */
     async requestPasswordReset(identifier) {
         const user = await this.#databaseAdapter.findUserByIdentifier(identifier)
             ?? await this.#databaseAdapter.retrieveUserAuthData(identifier);
 
-        if (!user) return; // Silent failure — never leak user existence
+        if (!user) return;
 
         const { randomBytes, createHash } = await import('node:crypto');
 
         const token = randomBytes(32).toString('hex');
-        // Store a sha256 hash of the token (no external dep, still unguessable)
         const tokenHash = createHash('sha256').update(token).digest('hex');
-        const expiresAt = Date.now() + 30 * 60 * 1000; // 30 minutes
+        const expiresAt = Date.now() + 30 * 60 * 1000;
 
         await this.#databaseAdapter.createPasswordResetToken(user.id, tokenHash, expiresAt);
 
-        // Resolve user contact info for the adaptor
         const identifiers = await this.#databaseAdapter.getUserIdentifiers(user.id);
         const primaryEmail = identifiers.find(i => i.type === 'email' && i.is_primary)?.value
             ?? identifiers.find(i => i.type === 'email')?.value;
@@ -447,9 +359,6 @@ export class AuthManager {
         await adaptor.sendUserRecoveryCode(contactData, token);
     }
 
-    /**
-     * Completes a password reset using a token that was delivered via contact adaptor.
-     */
     async resetPassword(token, newPassword) {
         const { createHash } = await import('node:crypto');
         const tokenHash = createHash('sha256').update(token).digest('hex');
@@ -465,17 +374,11 @@ export class AuthManager {
         await this.#databaseAdapter.invalidatePasswordResetToken(matched.token_hash);
     }
 
-    /**
-     * Changes the password for an already-authenticated user.
-     * Must be called from a fresh-auth protected route.
-     */
     async changePassword(userId, newPassword) {
         PasswordService.validateStrength(newPassword);
         const passwordHash = await PasswordService.hash(newPassword);
         await this.#databaseAdapter.updateUserPassword(userId, passwordHash);
     }
-
-    // ── Multi-channel Identifiers ───────────────────────────────────────────
 
     async addUserIdentifier(userId, type, value) {
         const validTypes = this.#config.identifierTypes || ['email', 'phone', 'username'];
@@ -486,7 +389,6 @@ export class AuthManager {
     }
 
     async removeUserIdentifier(userId, type, value) {
-        // Prevent removing the last identifier
         const all = await this.#databaseAdapter.getUserIdentifiers(userId);
         if (all.length <= 1) {
             throw new ValidationError(ERROR.server_error, 'Cannot remove the last identifier on an account');
@@ -498,17 +400,6 @@ export class AuthManager {
         return await this.#databaseAdapter.getUserIdentifiers(userId);
     }
 
-    // ── Session Management ──────────────────────────────────────────────────
-
-    async getUserSessions(userId) {
-        return await this.#databaseAdapter.getSessionsByUserId(userId);
-    }
-
-    async revokeSession(userId, sessionId) {
-        await this.#databaseAdapter.deleteSessionById(sessionId, userId);
-    }
-
-    // Expose database adapter for custom DX routes
     get databaseAdapter() {
         return this.#databaseAdapter;
     }

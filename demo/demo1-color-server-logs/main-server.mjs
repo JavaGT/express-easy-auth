@@ -7,9 +7,11 @@ import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const app = express();
+app.use(express.json({ limit: '10kb' }));
+
 const consoleContact = new ConsoleContactAdaptor();
 
-const app = express();
 const authManager = new AuthManager({
     databaseAdapter: SQLiteAdaptor,
     databasePath: path.join(__dirname, 'data/auth.db'),
@@ -22,16 +24,15 @@ const authManager = new AuthManager({
     }
 });
 
-// Initialize auth system
 await authManager.init();
 
-// Simplify: Use EasyAuth facade
-const authMiddleware = EasyAuth.attach(app, authManager, { basePath: '/auth' });
+const authMiddleware = EasyAuth.attach(app, authManager, {
+    basePath: '/auth',
+    session: { secret: process.env.SESSION_SECRET || 'demo-secret-change-in-production' }
+});
 
-// Add Rate Limiting to sensitive auth routes (via the middleware we just got)
 app.use('/auth', authMiddleware.rateLimit({ max: 10, windowMs: 60000 }));
 
-// Simple request logger
 app.use((req, res, next) => {
     const start = Date.now();
     res.on('finish', () => {
@@ -47,7 +48,6 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.json({ limit: '10kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.use('/api/v1', router_api);

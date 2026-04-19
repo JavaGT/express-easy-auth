@@ -1,17 +1,15 @@
-import { EasyAuthClient } from '/api/v1/auth/client.js';
+import { EasyAuthClient } from '/auth/client.js';
 
 // Constants
 const API_BASE = '/api/v1';
-const auth = new EasyAuthClient({ apiBase: '/api/v1/auth' });
+const auth = new EasyAuthClient({ apiBase: '/auth' });
 
 let stepUpPendingAction = null;
 let currentTotpSecret = null;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
-    if (auth.sessionToken) {
-        await checkAuth();
-    }
+    await checkAuth();
     setupForms();
     setupColorPickers();
 });
@@ -351,10 +349,8 @@ async function sendLog(color) {
     try {
         const response = await fetch(`${API_BASE}/logs/server`, {
             method: 'POST',
-            headers: { 
-                'Authorization': `Bearer ${auth.sessionToken}`,
-                'Content-Type': 'application/json' 
-            },
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message, color })
         });
         const data = await response.json();
