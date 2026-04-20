@@ -11,6 +11,14 @@ The Express Easy Auth uses a decoupled, service-oriented architecture designed f
 - **Interface Segregation (ISP) / Liskov Substitution (LSP)**: All data and contact interactions must adhere to the `DatabaseAdaptor` and `ContactAdaptor` protocols.
 - **Dependency Inversion (DIP)**: `AuthManager` accepts service injections in its constructor. Always prefer injecting dependencies over instantiating them.
 
+### 🔑 Middleware Patterns
+Standardize on the explicit trilogy of guards in `AuthMiddleware`:
+- `requireAuth` for human session flows.
+- `requireApiKey` for programmatic/worker flows.
+- `requireAuthOrApiKey` for hybrid endpoints.
+- `requireFreshAuth` for sensitive operations requiring recent re-verification.
+
+
 ## 🛠️ Protocols & Extensibility
 
 ### 🗄️ Database Adaptors
@@ -33,6 +41,8 @@ To add a new contact method (e.g., Twilio for SMS):
   - **Internal Requirements**: If a login requirement is missing (like a TOTP code), throw a `MultiError` or `AuthError` containing the `TOTP_CODE_REQUIRED` type to trigger the correct frontend flow.
 - **Function Size**: Aim for small, focused functions (4-10 lines). Decompose complex logic into private `#methods`.
 - **Naming**: Use intention-revealing names. Booleans should use predicate phrasing (`hasTotpEnabled`).
+- **Authorization**: Use `AuthManager.assignRole(userId, roleName)` for bootstrapping permissions. Avoid reaching into `databaseAdapter.db` directly.
+
 
 ## 🚀 Future Improvements Log (Living Document)
 
