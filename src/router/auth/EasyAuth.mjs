@@ -3,25 +3,27 @@ import authRoutes from './routes.mjs';
 import { AuthMiddleware } from './AuthMiddleware.mjs';
 import { OpenAPIService } from './services/OpenAPIService.mjs';
 import { SQLiteSessionStore } from './stores/SQLiteSessionStore.mjs';
+import { AuthManager } from './AuthManager.mjs';
 
 /**
- * High-level convenience façade for wiring Easy Auth into an Express app
- * in a single call, without needing to manually configure the router and
- * middleware. The low-level API (`authRoutes`, `AuthMiddleware`) is still
- * fully available for advanced use cases.
- *
- * @example
- * import { EasyAuth } from 'express-easy-auth';
- *
- * const auth = EasyAuth.attach(app, authManager, {
- *   basePath: '/auth',
- *   session: { secret: process.env.SESSION_SECRET }
- * });
- *
- * // `auth` is an AuthMiddleware instance, ready to use on your own routes:
- * app.get('/profile', auth.requireAuth, (req, res) => res.json(req.user));
+ * Main facade for Express Easy Auth.
  */
 export class EasyAuth {
+    /**
+     * Recommended way to get started. Instantiates AuthManager, initializes it,
+     * attaches routes to the app, and returns both the auth middleware and manager.
+     *
+     * @param {import('express').Application} app The Express application instance.
+     * @param {object} config Configuration for AuthManager.
+     * @returns {Promise<{ auth: AuthMiddleware, authManager: AuthManager }>}
+     */
+    static async create(app, config = {}) {
+        const authManager = new AuthManager(config);
+        await authManager.init();
+        const auth = EasyAuth.attach(app, authManager, config);
+        return { auth, authManager };
+    }
+
     /**
      * Mount express-session and the Easy Auth router on an Express app,
      * then return a ready AuthMiddleware instance.

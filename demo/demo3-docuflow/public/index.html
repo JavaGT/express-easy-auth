@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocuFlow — express-easy-auth v4</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="app">
+
+    <!-- ── Login ─────────────────────────────────────────────────── -->
+    <div id="login-view" class="view hidden">
+        <div class="auth-card">
+            <div class="auth-logo">DocuFlow</div>
+            <p class="auth-subtitle">express-easy-auth v4 demo</p>
+            <form id="login-form">
+                <input type="email"    id="login-email"    placeholder="Email"    required autocomplete="username">
+                <input type="password" id="login-password" placeholder="Password" required autocomplete="current-password">
+                <p class="form-error hidden" id="login-error"></p>
+                <button type="submit" class="btn-primary">Sign In</button>
+            </form>
+            <p class="auth-footer">No account? <a href="#" id="goto-register">Create one</a></p>
+        </div>
+    </div>
+
+    <!-- ── Register ──────────────────────────────────────────────── -->
+    <div id="register-view" class="view hidden">
+        <div class="auth-card">
+            <div class="auth-logo">DocuFlow</div>
+            <p class="auth-subtitle">Create account</p>
+            <form id="register-form">
+                <input type="email"  id="reg-email"    placeholder="Email"           required>
+                <input type="text"   id="reg-name"     placeholder="Display Name">
+                <input type="password" id="reg-password" placeholder="Password (min 8 chars)" required>
+                <p class="form-error hidden" id="register-error"></p>
+                <button type="submit" class="btn-primary">Sign Up</button>
+            </form>
+            <p class="auth-footer">Have an account? <a href="#" id="goto-login">Sign in</a></p>
+        </div>
+    </div>
+
+    <!-- ── App ───────────────────────────────────────────────────── -->
+    <div id="app-view" class="view hidden">
+
+        <header class="app-header">
+            <span class="logo">DocuFlow</span>
+            <div class="header-right">
+                <span id="header-user" class="user-email"></span>
+                <button id="apikeys-btn"  class="btn-ghost btn-sm">API Keys</button>
+                <button id="admin-btn"    class="btn-ghost btn-sm hidden">Admin</button>
+                <button id="logout-btn"   class="btn-ghost btn-sm">Logout</button>
+            </div>
+        </header>
+
+        <div class="main-layout">
+
+            <!-- Projects sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h3>Projects</h3>
+                    <button id="new-project-btn" class="btn-icon" title="New project">+</button>
+                </div>
+                <ul id="projects-list" class="nav-list"></ul>
+            </aside>
+
+            <!-- Content area -->
+            <main class="content-area">
+
+                <div id="no-project" class="empty-state">
+                    <p>Select a project or create a new one.</p>
+                </div>
+
+                <div id="project-workspace" class="hidden">
+
+                    <div class="workspace-header">
+                        <div class="ws-title-row">
+                            <h2 id="ws-project-name"></h2>
+                            <span id="ws-owner-badge" class="badge badge-owner hidden">owner</span>
+                        </div>
+                        <div class="ws-actions">
+                            <button id="transfer-btn"       class="btn-ghost btn-sm hidden">Transfer</button>
+                            <button id="delete-project-btn" class="btn-danger btn-sm hidden">Delete Project</button>
+                        </div>
+                    </div>
+
+                    <div class="tab-bar">
+                        <button class="tab active" data-tab="docs">Documents</button>
+                        <button class="tab"         data-tab="members">Members</button>
+                    </div>
+
+                    <!-- Docs -->
+                    <div id="docs-panel" class="tab-panel">
+                        <div class="panel-toolbar">
+                            <button id="new-doc-btn" class="btn-primary btn-sm hidden">+ New Document</button>
+                        </div>
+                        <div id="docs-list" class="item-list"></div>
+                    </div>
+
+                    <!-- Members -->
+                    <div id="members-panel" class="tab-panel hidden">
+                        <div class="panel-toolbar">
+                            <button id="add-member-btn" class="btn-primary btn-sm hidden">+ Add Member</button>
+                        </div>
+                        <div id="members-list" class="item-list"></div>
+                    </div>
+
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <!-- ── API Keys overlay ──────────────────────────────────────── -->
+    <div id="apikeys-overlay" class="side-overlay hidden">
+        <div class="side-panel">
+            <div class="panel-header">
+                <h3>API Keys</h3>
+                <button id="close-apikeys-btn" class="btn-ghost btn-close">×</button>
+            </div>
+            <div class="panel-body">
+                <button id="create-key-btn" class="btn-primary btn-sm">+ Create Key</button>
+                <div id="apikeys-list" class="item-list mt-1"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Admin overlay ─────────────────────────────────────────── -->
+    <div id="admin-overlay" class="side-overlay hidden">
+        <div class="side-panel side-panel-wide">
+            <div class="panel-header">
+                <h3>Admin Panel</h3>
+                <button id="close-admin-btn" class="btn-ghost btn-close">×</button>
+            </div>
+            <div class="panel-body">
+                <div class="tab-bar tab-bar-sm">
+                    <button class="tab active" data-admin-tab="users">Users</button>
+                    <button class="tab"         data-admin-tab="projects">Projects</button>
+                </div>
+                <div id="admin-users-panel">
+                    <div id="admin-users-list" class="item-list mt-1"></div>
+                </div>
+                <div id="admin-projects-panel" class="hidden">
+                    <div id="admin-projects-list" class="item-list mt-1"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- ── Modal ─────────────────────────────────────────────────────── -->
+<div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+        <h3 id="modal-title"></h3>
+        <div id="modal-body" class="modal-body"></div>
+        <div class="modal-footer">
+            <button id="modal-cancel"  class="btn-ghost">Cancel</button>
+            <button id="modal-confirm" class="btn-primary">Confirm</button>
+        </div>
+    </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

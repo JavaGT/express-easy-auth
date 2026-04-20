@@ -21,12 +21,30 @@ function extractWebAuthnConfig(req) {
     return { origin, rpID };
 }
 
-function populateSession(req, user) {
-    req.session.userId              = user.id;
-    req.session.lastAuthenticatedAt = Date.now();
+function saveSession(req) {
     return new Promise((resolve, reject) =>
         req.session.save((err) => err ? reject(err) : resolve())
     );
+}
+
+function destroySession(req) {
+    return new Promise((resolve) => req.session.destroy(resolve));
+}
+
+function destroyByUserId(req, userId) {
+    return new Promise((resolve) => req.sessionStore.destroyByUserId(userId, resolve));
+}
+
+function getAllByUserId(req, userId) {
+    return new Promise((resolve, reject) =>
+        req.sessionStore.getAllByUserId(userId, (err, rows) => err ? reject(err) : resolve(rows))
+    );
+}
+
+async function populateSession(req, user) {
+    req.session.userId              = user.id;
+    req.session.lastAuthenticatedAt = Date.now();
+    await saveSession(req);
 }
 
 export default function authRoutes(authManager, rateLimitOptions = {}) {
@@ -89,7 +107,7 @@ export default function authRoutes(authManager, rateLimitOptions = {}) {
     router.delete('/account', mw.requireFreshAuth, wrap(async (req, res) => {
         const userId = req.user.id;
         const result = await authManager.deleteUser(userId);
-        await new Promise((resolve) => req.session.destroy(resolve));
+        await destroySession(req);
         res.json(result);
     }));
 
@@ -184,7 +202,7 @@ export default function authRoutes(authManager, rateLimitOptions = {}) {
         delete req.session.verifyNonce;
         const result    = await authManager.verifyAuthentication(req.body, challenge, cfg);
         req.session.lastAuthenticatedAt = Date.now();
-        await new Promise((resolve, reject) => req.session.save((err) => err ? reject(err) : resolve()));
+        await saveSession(req);
         res.json(result);
     }));
 
@@ -253,7 +271,7 @@ export default function authRoutes(authManager, rateLimitOptions = {}) {
         const { token, newPassword } = req.body;
         const { userId } = await authManager.resetPassword(token, newPassword);
         // Invalidate all sessions for the user after a password reset.
-        await new Promise((resolve) => req.sessionStore.destroyByUserId(userId, resolve));
+        await destroyByUserId(req, userId);
         res.json({ success: true });
     }));
 
@@ -265,7 +283,7 @@ export default function authRoutes(authManager, rateLimitOptions = {}) {
         const userId = req.user.id;
         await authManager.changePassword(userId, req.body.newPassword);
         // Invalidate all sessions except the current one, then re-populate it.
-        await new Promise((resolve) => req.sessionStore.destroyByUserId(userId, resolve));
+        await destroyByUserId(req, userId);
         await populateSession(req, req.user);
         res.json({ success: true });
     }));
@@ -290,9 +308,7 @@ export default function authRoutes(authManager, rateLimitOptions = {}) {
     // -------------------------------------------------------------------------
 
     router.get('/sessions', mw.requireAuth, wrap(async (req, res) => {
-        const sessions = await new Promise((resolve, reject) =>
-            req.sessionStore.getAllByUserId(req.user.id, (err, rows) => err ? reject(err) : resolve(rows))
-        );
+        const sessions = await getAllByUserId(req, req.user.id);
         res.json({ success: true, sessions: sessions.map(s => ({ ...s, isCurrent: s.sid === req.sessionID })) });
     }));
 
@@ -303,9 +319,7 @@ export default function authRoutes(authManager, rateLimitOptions = {}) {
             err.code = 400;
             throw err;
         }
-        const sessions = await new Promise((resolve, reject) =>
-            req.sessionStore.getAllByUserId(req.user.id, (err, rows) => err ? reject(err) : resolve(rows))
-        );
+        const sessions = await getAllByUserId(req, req.user.id);
         if (!sessions.find(s => s.sid === sessionId)) {
             const err = new AuthError(ERROR.invalid_session, 'Session not found');
             err.code = 404;

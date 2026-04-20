@@ -8,13 +8,6 @@ export class AuthMiddleware {
 
     constructor(authManager) {
         this.#authManager = authManager;
-        this.#rateLimitStore = new Map();
-        setInterval(() => {
-            const now = Date.now();
-            for (const [ip, record] of this.#rateLimitStore) {
-                if (now > record.resetTime) this.#rateLimitStore.delete(ip);
-            }
-        }, 15 * 60 * 1000).unref();
 
         this.useApiKey              = this.useApiKey.bind(this);
         this.requireApiKey          = this.requireApiKey.bind(this);
@@ -29,7 +22,7 @@ export class AuthMiddleware {
     }
 
     // -------------------------------------------------------------------------
-    // Key extraction
+    // Key extraction & Resolution
     // -------------------------------------------------------------------------
 
     #extractApiKey(req) {
@@ -39,18 +32,44 @@ export class AuthMiddleware {
         return null;
     }
 
+    async #resolveSessionUser(req) {
+        if (!req.session?.userId) return false;
+        try {
+            const user = await this.#authManager.getUserById(req.session.userId);
+            if (!user) return false;
+            req.user                = { id: user.id, email: user.email, display_name: user.display_name };
+            req.lastAuthenticatedAt = req.session.lastAuthenticatedAt ?? 0;
+            req.authType            = 'session';
+            return true;
+        } catch (err) {
+            if (!(err instanceof MultiError) && !err.type) throw err;
+            return false;
+        }
+    }
+
+    async #resolveApiKeyUser(req, rawKey) {
+        const keyToUse = rawKey || this.#extractApiKey(req);
+        if (!keyToUse) return false;
+        try {
+            const authData = await this.#authManager.authenticateApiKey(keyToUse);
+            req.user     = authData.user;
+            req.apiKey   = { id: authData.keyId, name: authData.keyName, prefix: authData.keyPrefix, grants: authData.grants };
+            req.authType = 'api_key';
+            return true;
+        } catch (err) {
+            if (!(err instanceof MultiError) && !err.type) throw err;
+            return false;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Core auth middleware
     // -------------------------------------------------------------------------
 
     async useApiKey(req, res, next) {
-        const rawKey = this.#extractApiKey(req);
-        if (!rawKey) return next(new AuthError(ERROR.api_key_required));
         try {
-            const authData = await this.#authManager.authenticateApiKey(rawKey);
-            req.user     = authData.user;
-            req.apiKey   = { id: authData.keyId, name: authData.keyName, prefix: authData.keyPrefix, grants: authData.grants };
-            req.authType = 'api_key';
+            const success = await this.#resolveApiKeyUser(req);
+            if (!success) return next(new AuthError(ERROR.api_key_required));
             next();
         } catch (err) {
             next(err);
@@ -62,13 +81,9 @@ export class AuthMiddleware {
     }
 
     async requireAuth(req, res, next) {
-        if (!req.session?.userId) return next(new AuthError(ERROR.invalid_session));
         try {
-            const user = await this.#authManager.getUserById(req.session.userId);
-            if (!user) return next(new AuthError(ERROR.invalid_session));
-            req.user                = { id: user.id, email: user.email, display_name: user.display_name };
-            req.lastAuthenticatedAt = req.session.lastAuthenticatedAt ?? 0;
-            req.authType            = 'session';
+            const success = await this.#resolveSessionUser(req);
+            if (!success) return next(new AuthError(ERROR.invalid_session));
             next();
         } catch (err) {
             next(err);
@@ -76,34 +91,13 @@ export class AuthMiddleware {
     }
 
     async requireAuthOrApiKey(req, res, next) {
-        if (req.session?.userId) {
-            try {
-                const user = await this.#authManager.getUserById(req.session.userId);
-                if (user) {
-                    req.user                = { id: user.id, email: user.email, display_name: user.display_name };
-                    req.lastAuthenticatedAt = req.session.lastAuthenticatedAt ?? 0;
-                    req.authType            = 'session';
-                    return next();
-                }
-            } catch (err) {
-                if (!(err instanceof MultiError) && !err.type) return next(err);
-            }
+        try {
+            if (await this.#resolveSessionUser(req)) return next();
+            if (await this.#resolveApiKeyUser(req)) return next();
+            next(new AuthError(ERROR.invalid_session));
+        } catch (err) {
+            next(err);
         }
-
-        const rawKey = this.#extractApiKey(req);
-        if (rawKey) {
-            try {
-                const authData = await this.#authManager.authenticateApiKey(rawKey);
-                req.user     = authData.user;
-                req.apiKey   = { id: authData.keyId, name: authData.keyName, prefix: authData.keyPrefix, grants: authData.grants };
-                req.authType = 'api_key';
-                return next();
-            } catch (err) {
-                if (!(err instanceof MultiError) && !err.type) return next(err);
-            }
-        }
-
-        next(new AuthError(ERROR.invalid_session));
     }
 
     /**

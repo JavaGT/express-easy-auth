@@ -1,5 +1,5 @@
 import { AuthManager, SQLiteAdaptor } from './AuthManager.mjs';
-import { ERROR, ResourceConflictError, AuthError, ValidationError, ValidationError as InputError } from './util/errors.mjs';
+import { ERROR, ResourceConflictError, AuthError, ValidationError } from './util/errors.mjs';
 import { PERSONAL_SCOPES, SESSION_ONLY_SCOPES } from './util/PersonalScopes.mjs';
 import { ContactAdaptor, ConsoleContactAdaptor, SmsContactAdaptor } from './contact-adaptors/index.mjs';
 import authRoutes from './routes.mjs';

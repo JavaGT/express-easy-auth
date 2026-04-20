@@ -7,12 +7,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export default class SQLiteAdaptor extends DatabaseAdaptor {
-    constructor(config) {
+    constructor(config = {}) {
         super(config);
-        if (config.mkdirp) {
-            fs.mkdirSync(path.dirname(config.databasePath), { recursive: true });
+        const databasePath = config.databasePath || './data/auth.db';
+        const mkdirp = config.mkdirp ?? true;
+
+        if (mkdirp) {
+            fs.mkdirSync(path.dirname(databasePath), { recursive: true });
         }
-        this.db = new DatabaseSync(config.databasePath);
+        this.db = new DatabaseSync(databasePath);
         // Do not call init() here — AuthManager.init() calls it once via the DatabaseAdaptor interface.
     }
 
