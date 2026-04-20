@@ -81,9 +81,9 @@ The `AuthManager` is the brain of the system. It orchestrates various services l
 | Method | Returns | Description |
 | :--- | :--- | :--- |
 | `requireAuth` | middleware | Requires a valid session cookie. Sets `req.user`, `req.scopes`, `req.roles`, `req.authType = 'session'`. |
-| `requireApiKey` | middleware | Requires a valid API key. Errors immediately if no key is present. Sets `req.user`, `req.scopes`, `req.authType = 'api_key'`. |
+| `requireApiKey` | middleware | Requires a valid API key. Errors immediately if no key is present. Sets `req.user`, `req.apiUser` (containing the API key internal `id`), `req.scopes`, `req.authType = 'api_key'`. |
 | `useApiKey` | middleware | Same as `requireApiKey` — alias provided for semantic clarity in some contexts. |
-| `requireAuthOrApiKey` | middleware | Accepts either a valid session **or** a valid API key. Tries session first, then key. |
+| `requireAuthOrApiKey` | middleware | Accepts either a valid session **or** a valid API key. Tries session first, then key. Exposes `req.apiUser` when authenticated via key. |
 | `requireFreshAuth` | middleware **or** factory | Requires the session to have been re-authenticated within the last 5 minutes. Does **not** accept API keys. Imples `requireAuth` — no need to chain. |
 | `rateLimit(options)` | factory | Returns an IP-based rate-limiting middleware. |
 

@@ -33,7 +33,8 @@ export class ApiKeyService {
                 email: key.email
             },
             scopes: key.scopes ? JSON.parse(key.scopes) : [],
-            name: key.name
+            name: key.name,
+            id: key.id
         };
     }
 }

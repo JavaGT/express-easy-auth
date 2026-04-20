@@ -68,6 +68,7 @@ export class AuthMiddleware {
         try {
             const authData = await this.#authManager.authenticateApiKey(apiKey);
             req.user = authData.user;
+            req.apiUser = { id: authData.id };
             req.scopes = authData.scopes;
             req.authType = 'api_key';
             next();
@@ -133,6 +134,7 @@ export class AuthMiddleware {
             try {
                 const authData = await this.#authManager.authenticateApiKey(apiKey);
                 req.user = authData.user;
+                req.apiUser = { id: authData.id };
                 req.scopes = authData.scopes || [];
                 req.keyName = authData.name;
                 req.authType = 'api_key';
