@@ -41,6 +41,12 @@ function getAllByUserId(req, userId) {
     );
 }
 
+function destroyStoredSession(req, sid) {
+    return new Promise((resolve, reject) =>
+        req.sessionStore.destroy(sid, (err) => err ? reject(err) : resolve())
+    );
+}
+
 async function populateSession(req, user) {
     req.session.userId              = user.id;
     req.session.lastAuthenticatedAt = Date.now();
@@ -325,9 +331,7 @@ export default function authRoutes(authManager, rateLimitOptions = {}) {
             err.code = 404;
             throw err;
         }
-        await new Promise((resolve, reject) =>
-            req.sessionStore.destroy(sessionId, (err) => err ? reject(err) : resolve())
-        );
+        await destroyStoredSession(req, sessionId);
         res.json({ success: true });
     }));
 

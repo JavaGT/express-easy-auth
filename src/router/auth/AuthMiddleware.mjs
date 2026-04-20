@@ -4,7 +4,6 @@ import { SESSION_ONLY_SCOPES } from './util/PersonalScopes.mjs';
 
 export class AuthMiddleware {
     #authManager;
-    #rateLimitStore;
 
     constructor(authManager) {
         this.#authManager = authManager;
