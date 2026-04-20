@@ -40,7 +40,7 @@ export class AuthManager {
         this.#authValidator = services.authValidator || new AuthenticationValidator(this.#databaseAdapter);
         this.#apiKeyService = services.apiKeyService || new ApiKeyService(this.#databaseAdapter);
         this.#webAuthnService = services.webAuthnService || new WebAuthnService(this.#databaseAdapter, config.webAuthn);
-        this.#totpService = services.totpService || new TotpService();
+        this.#totpService = services.totpService || new TotpService(config.totp?.issuer || 'Easy Auth Demo');
         this.#challengeStore = config.challengeStore || new InMemoryChallengeStore();
 
         this.#bindMethods();

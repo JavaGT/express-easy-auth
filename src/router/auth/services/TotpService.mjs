@@ -2,6 +2,12 @@
  * Service for managing Time-based One-Time Passwords (TOTP).
  */
 export class TotpService {
+    #issuer;
+
+    constructor(issuer = 'Easy Auth Demo') {
+        this.#issuer = issuer;
+    }
+
     /**
      * Generate a new 20-character base32 secret.
      */
@@ -18,7 +24,7 @@ export class TotpService {
     /**
      * Generate an otpauth:// URI for QR code generation.
      */
-    async generateOtpauthUrl(userEmail, secret, issuer = 'Easy Auth Demo') {
+    async generateOtpauthUrl(userEmail, secret, issuer = this.#issuer) {
         try {
             const otplib = await import('otplib');
             return otplib.generateURI({

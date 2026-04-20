@@ -31,6 +31,9 @@ app.use(express.json());
 const authManager = new AuthManager({
   databasePath: './data/auth.db', // SQLite database path
   mkdirp: true,                   // Auto-create directories
+  totp: {
+    issuer: 'My Awesome App'      // Appearance in Authenticator apps
+  },
   webAuthn: {
     rpName: 'My Awesome App',
     rpID: 'localhost',
