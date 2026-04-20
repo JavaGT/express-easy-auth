@@ -190,6 +190,29 @@ export default class SQLiteAdaptor extends DatabaseAdaptor {
         return this.db.prepare(statements.getRolePermissions).all(roleId);
     }
 
+    /**
+     * Assign a named role to a user.
+     * Creates the role in the `roles` table if it does not already exist,
+     * then inserts the `user_roles` record. Both operations are idempotent.
+     */
+    async assignRole(userId, roleName) {
+        const now = Date.now();
+        this.db.prepare('INSERT OR IGNORE INTO roles (name) VALUES (?)').run(roleName);
+        const role = this.db.prepare('SELECT id FROM roles WHERE name = ?').get(roleName);
+        this.db.prepare(
+            'INSERT OR IGNORE INTO user_roles (user_id, role_id, created_at) VALUES (?, ?, ?)'
+        ).run(userId, role.id, now);
+    }
+
+    /**
+     * Remove a named role from a user. No-ops silently if the user does not have the role.
+     */
+    async removeRole(userId, roleName) {
+        const role = this.db.prepare('SELECT id FROM roles WHERE name = ?').get(roleName);
+        if (!role) return;
+        this.db.prepare('DELETE FROM user_roles WHERE user_id = ? AND role_id = ?').run(userId, role.id);
+    }
+
     // Multi-channel Identifiers
     async findUserByIdentifier(value) {
         const user = this.db.prepare(statements.findUserByIdentifier).get(value);

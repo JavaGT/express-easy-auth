@@ -195,8 +195,8 @@ export default function authRoutes(authManager) {
 
     router.post('/keys', middleware.requireAuth, wrap(async (req, res) => {
         const { scopes, expiresAt, name } = req.body;
-        const apiKey = await authManager.createApiKey(req.user.id, scopes || ['all'], expiresAt, name);
-        res.status(201).json({ success: true, apiKey });
+        const keyRecord = await authManager.createApiKey(req.user.id, scopes || ['all'], expiresAt, name);
+        res.status(201).json({ success: true, ...keyRecord });
     }));
 
     router.delete('/keys/:key', middleware.requireAuth, wrap(async (req, res) => {

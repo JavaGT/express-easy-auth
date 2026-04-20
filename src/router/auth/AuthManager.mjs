@@ -58,7 +58,8 @@ export class AuthManager {
             'getScopeTaxonomy',
             'requestPasswordReset', 'resetPassword', 'changePassword',
             'addUserIdentifier', 'removeUserIdentifier', 'getIdentifiers',
-            'verifyEmail'
+            'verifyEmail',
+            'assignRole', 'removeRole'
         ];
 
         for (const method of methods) {
@@ -227,22 +228,36 @@ export class AuthManager {
         return await this.#databaseAdapter.deleteAuthenticator(credentialId, userId);
     }
 
-    async createApiKey(userId, scopes, expiresAt, name) {
+    /**
+     * Create a new API key for a user.
+     *
+     * @param {number} userId
+     * @param {string[]} scopes - Scopes to grant to this key.
+     * @param {number|null} expiresAt - Unix timestamp (ms) or null for no expiry.
+     * @param {string|null} name - Human-readable label for the key.
+     * @param {object} [options]
+     * @param {string[]} [options.callerScopes] - If provided, used instead of looking up the user's
+     *   roles in the database. Useful for trusted server-side issuance when the host application
+     *   manages its own authorization model (e.g. project ownership in an external DB).
+     * @returns {{ key: string, id: number, name: string|null, scopes: string[], createdAt: number }}
+     */
+    async createApiKey(userId, scopes, expiresAt, name, { callerScopes } = {}) {
         if (this.#config.scopes && !ScopeValidator.isValidTaxonomy(scopes, this.#config.scopes)) {
             const unknown = scopes.filter(s => !this.#config.scopes.includes(s) && s !== '*');
             throw new ValidationError(ERROR.invalid_scope, `Unknown scopes: ${unknown.join(', ')}`);
         }
 
-        const userScopes = await this.#getUserScopes(userId);
+        const authorityScopes = callerScopes ?? await this.#getUserScopes(userId);
 
-        if (!ScopeValidator.isSubset(scopes, userScopes)) {
-            const unauthorized = scopes.filter(s => !userScopes.includes(s) && !userScopes.includes('*'));
+        if (!ScopeValidator.isSubset(scopes, authorityScopes)) {
+            const unauthorized = scopes.filter(s => !authorityScopes.includes(s) && !authorityScopes.includes('*'));
             throw new ValidationError(ERROR.scope_exceeds_user_authority, `Cannot grant scopes you do not possess: ${unauthorized.join(', ')}`);
         }
 
         const apiKey = this.#generateApiKey();
-        await this.#databaseAdapter.createApiKey(userId, apiKey, name || null, JSON.stringify(scopes), expiresAt);
-        return apiKey;
+        const createdAt = Date.now();
+        const id = await this.#databaseAdapter.createApiKey(userId, apiKey, name || null, JSON.stringify(scopes), expiresAt);
+        return { key: apiKey, id, name: name || null, scopes, createdAt };
     }
 
     async #getUserScopes(userId) {
@@ -398,6 +413,28 @@ export class AuthManager {
 
     async getIdentifiers(userId) {
         return await this.#databaseAdapter.getUserIdentifiers(userId);
+    }
+
+    /**
+     * Assign a named role to a user, creating the role if it does not exist.
+     * This is the recommended way to configure user permissions for API key issuance
+     * without reaching into `databaseAdapter.db` directly.
+     *
+     * @param {number} userId
+     * @param {string} roleName
+     */
+    async assignRole(userId, roleName) {
+        await this.#databaseAdapter.assignRole(userId, roleName);
+    }
+
+    /**
+     * Remove a named role from a user.
+     *
+     * @param {number} userId
+     * @param {string} roleName
+     */
+    async removeRole(userId, roleName) {
+        await this.#databaseAdapter.removeRole(userId, roleName);
     }
 
     get databaseAdapter() {

@@ -149,6 +149,21 @@ export default class DatabaseAdaptor {
     }
 
     /**
+     * Assign a named role to a user, creating the role record if it does not exist.
+     * This operation must be idempotent (calling it twice must not error).
+     */
+    async assignRole(userId, roleName) {
+        throw new Error('assignRole not implemented');
+    }
+
+    /**
+     * Remove a named role from a user. No-ops silently if the user does not have the role.
+     */
+    async removeRole(userId, roleName) {
+        throw new Error('removeRole not implemented');
+    }
+
+    /**
      * Multi-channel Identifiers (email, phone, username).
      * Each identifier belongs to exactly one user and has a type.
      */
