@@ -20,7 +20,7 @@ export default class MultiError extends Error {
     }
 
     throw() {
-        throw this.build();
+        throw this;
     }
 
     get message() {

@@ -2,13 +2,19 @@ import expressSession from 'express-session';
 
 const Store = expressSession.Store;
 
+// Default session TTL: 7 days in milliseconds.
+const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export class SQLiteSessionStore extends Store {
     /**
-     * @param {Object} databaseAdapter - An instance of DatabaseAdaptor, like SQLiteAdaptor
+     * @param {import('../database-adaptors/DatabaseAdaptor.mjs').default} databaseAdapter
+     * @param {object} [options]
+     * @param {number} [options.sessionTtlMs=604800000] - Default session TTL in milliseconds (default 7 days).
      */
-    constructor(databaseAdapter) {
+    constructor(databaseAdapter, options = {}) {
         super();
-        this.db = databaseAdapter.db;
+        this.db = databaseAdapter.getDatabaseSync();
+        this.sessionTtlMs = options.sessionTtlMs ?? DEFAULT_SESSION_TTL_MS;
         this._initTable();
         setInterval(() => this._cleanup(), 15 * 60 * 1000).unref();
     }
@@ -28,10 +34,8 @@ export class SQLiteSessionStore extends Store {
 
     get(sid, callback) {
         try {
-            const row = this.db.prepare('SELECT data FROM express_sessions WHERE sid=? AND expires_at > unixepoch()').get(sid);
-            if (!row) {
-                return callback(null, null);
-            }
+            const row = this.db.prepare('SELECT data FROM express_sessions WHERE sid=? AND expires_at > ?').get(sid, Date.now());
+            if (!row) return callback(null, null);
             callback(null, JSON.parse(row.data));
         } catch (e) {
             callback(e);
@@ -40,12 +44,12 @@ export class SQLiteSessionStore extends Store {
 
     set(sid, session, callback) {
         try {
-            const now = Math.floor(Date.now() / 1000);
-            const expires = session.cookie && session.cookie.expires
-                ? Math.floor(new Date(session.cookie.expires).getTime() / 1000)
-                : Math.floor((Date.now() + 7 * 24 * 60 * 60 * 1000) / 1000);
-            const data = JSON.stringify(session);
-            const userId = session.userId || null;
+            const now     = Date.now();
+            const expires = session.cookie?.expires
+                ? new Date(session.cookie.expires).getTime()
+                : now + this.sessionTtlMs;
+            const data    = JSON.stringify(session);
+            const userId  = session.userId || null;
 
             this.db.prepare(`
                 INSERT INTO express_sessions (sid, user_id, data, created_at, expires_at, last_activity)
@@ -78,8 +82,8 @@ export class SQLiteSessionStore extends Store {
     getAllByUserId(userId, callback) {
         try {
             const rows = this.db.prepare(
-                'SELECT sid, created_at, expires_at, last_activity FROM express_sessions WHERE user_id=? AND expires_at > unixepoch() ORDER BY last_activity DESC'
-            ).all(userId);
+                'SELECT sid, created_at, expires_at, last_activity FROM express_sessions WHERE user_id=? AND expires_at > ? ORDER BY last_activity DESC'
+            ).all(userId, Date.now());
             callback(null, rows);
         } catch (e) {
             callback(e);
@@ -97,7 +101,7 @@ export class SQLiteSessionStore extends Store {
 
     _cleanup() {
         try {
-            this.db.prepare('DELETE FROM express_sessions WHERE expires_at <= unixepoch()').run();
+            this.db.prepare('DELETE FROM express_sessions WHERE expires_at <= ?').run(Date.now());
         } catch (_) {}
     }
 }

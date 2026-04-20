@@ -47,7 +47,7 @@ export class OpenAPIService {
                     bearerAuth: {
                         type: 'http',
                         scheme: 'bearer',
-                        bearerFormat: 'JWT'
+                        description: 'API key with sk_ prefix, e.g. "Bearer sk_..."',
                     },
                     apiKeyAuth: {
                         type: 'apiKey',

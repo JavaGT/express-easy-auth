@@ -23,7 +23,8 @@ export class ContactRequirementChecker {
             requires_TOTP: !!user.requires_totp,
             requires_login_code: !!user.requires_login_code,
             userId: user.id,
-            email: user.email
+            email: user.email,
+            display_name: user.display_name ?? null,
         };
     }
 }

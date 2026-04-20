@@ -18,7 +18,7 @@ export class InMemoryChallengeStore extends ChallengeStore {
             }
             const timer = setTimeout(() => {
                 this.delete(key);
-            }, ttlMs);
+            }, ttlMs).unref();
             this.#timers.set(key, timer);
         }
     }

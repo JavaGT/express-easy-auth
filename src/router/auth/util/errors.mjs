@@ -15,9 +15,15 @@ export const ERROR = {
     session_step_up_required: { message: 'Step-Up authentication required', code: 401, type: 'STEP_UP_REQUIRED' },
     scope_exceeds_user_authority: { message: 'Cannot grant scopes you do not possess', code: 403, type: 'SCOPE_EXCEEDS_USER_AUTHORITY' },
     invalid_scope: { message: 'Invalid or unknown scope', code: 400, type: 'INVALID_SCOPE' },
+    invalid_input: { message: 'Invalid input', code: 400, type: 'INVALID_INPUT' },
     insufficient_scope: { message: 'Insufficient scope for this action', code: 403, type: 'INSUFFICIENT_SCOPE' },
     server_error: { message: 'Internal server error', code: 500, type: 'SERVER_ERROR' },
-    resource_conflict: { message: 'Resource already exists', code: 409, type: 'RESOURCE_CONFLICT' }
+    resource_conflict: { message: 'Resource already exists', code: 409, type: 'RESOURCE_CONFLICT' },
+    api_key_expired: { message: 'API key has expired', code: 401, type: 'API_KEY_EXPIRED' },
+    project_not_found: { message: 'Project not found', code: 404, type: 'PROJECT_NOT_FOUND' },
+    not_a_member: { message: 'Not a member of this project', code: 403, type: 'NOT_A_MEMBER' },
+    not_project_owner: { message: 'Project owner access required', code: 403, type: 'NOT_PROJECT_OWNER' },
+    project_permissions_not_loaded: { message: 'Call loadProjectPermissions before requireProjectAccess', code: 500, type: 'PROJECT_PERMISSIONS_NOT_LOADED' }
 };
 
 /**

@@ -1,6 +1,6 @@
 {
   "name": "@javagt/express-easy-auth",
-  "version": "3.1.2",
+  "version": "4.1.0",
   "description": "Easy authentication library for Express.js supporting TOTP 2FA, passkeys, and user managed API keys",
   "main": "src/server.mjs",
   "type": "module",
@@ -11,12 +11,12 @@
   "scripts": {
     "start": "node demo/demo1-color-server-logs/main-server.mjs",
     "dev": "node --watch demo/demo1-color-server-logs/main-server.mjs",
-    "dev:chat": "node --watch demo/demo2-chat-app/main-server.mjs"
+    "dev:chat":     "node --watch demo/demo2-chat-app/main-server.mjs",
+    "dev:docuflow": "node --watch demo/demo3-docuflow/server.mjs"
   },
   "dependencies": {
     "@simplewebauthn/server": "^13.3.0",
     "bcryptjs": "^3.0.3",
-    "cors": "^2.8.5",
     "express": "^4.18.2",
     "express-session": "^1.18.1",
     "otplib": "^13.4.0",
@@ -32,6 +32,9 @@
   ],
   "author": "",
   "license": "ISC",
+  "engines": {
+    "node": ">=22.10.0"
+  },
   "publishConfig": {
     "access": "public"
   }

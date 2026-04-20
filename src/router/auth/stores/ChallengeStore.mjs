@@ -39,8 +39,9 @@ export class ChallengeStore {
     }
 
     /**
-     * Retrieve and immediately delete a challenge.
-     * Useful for single-use authentication challenges.
+     * Retrieve and immediately delete a challenge (single-use).
+     * IMPORTANT: Custom implementations must make get+delete atomic to prevent
+     * race conditions where two concurrent requests both consume the same challenge.
      */
     async consumeChallenge(key) {
         const challenge = await this.get(key);

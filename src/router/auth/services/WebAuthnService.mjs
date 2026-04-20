@@ -1,4 +1,4 @@
-import { ERROR } from '../util/errors.mjs';
+import { ERROR, AuthError } from '../util/errors.mjs';
 
 /**
  * Service for handles WebAuthn (Passkeys) registration and authentication.
@@ -40,36 +40,31 @@ export class WebAuthnService {
     }
 
     async verifyRegistration(user, registrationResponse, expectedChallenge, authenticatorName, reqConfig = {}) {
-        try {
-            const { verifyRegistrationResponse } = await import('@simplewebauthn/server');
+        const { verifyRegistrationResponse } = await import('@simplewebauthn/server');
 
-            const origin = reqConfig.origin || this.#origin;
-            const rpID = reqConfig.rpID || this.#rpID;
+        const origin = reqConfig.origin || this.#origin;
+        const rpID   = reqConfig.rpID   || this.#rpID;
 
-            const verification = await verifyRegistrationResponse({
-                response: registrationResponse,
-                expectedChallenge,
-                expectedOrigin: origin,
-                expectedRPID: rpID,
-            });
+        const verification = await verifyRegistrationResponse({
+            response: registrationResponse,
+            expectedChallenge,
+            expectedOrigin: origin,
+            expectedRPID: rpID,
+        });
 
-            if (verification.verified && verification.registrationInfo) {
-                const { id, publicKey, counter, transports } = verification.registrationInfo.credential;
-                await this.#databaseAdapter.createAuthenticator(
-                    user.id,
-                    id,
-                    Buffer.from(publicKey),
-                    counter,
-                    JSON.stringify(transports || registrationResponse.response.transports || []),
-                    authenticatorName
-                );
-            }
+        if (!verification.verified) throw new AuthError(ERROR.invalid_credentials);
 
-            return verification;
-        } catch (err) {
-            console.error('[WebAuthnService] Registration CRITICAL ERROR:', err);
-            throw err;
-        }
+        const { id, publicKey, counter, transports } = verification.registrationInfo.credential;
+        await this.#databaseAdapter.createAuthenticator(
+            user.id,
+            id,
+            Buffer.from(publicKey),
+            counter,
+            JSON.stringify(transports || registrationResponse.response.transports || []),
+            authenticatorName
+        );
+
+        return { verified: true };
     }
 
     async generateAuthenticationOptions(reqConfig = {}) {
@@ -85,9 +80,7 @@ export class WebAuthnService {
         const { verifyAuthenticationResponse } = await import('@simplewebauthn/server');
         
         const authenticator = await this.#databaseAdapter.getAuthenticatorById(authenticationResponse.id);
-        if (!authenticator) {
-            throw new Error(ERROR.invalid_credentials.message);
-        }
+        if (!authenticator) throw new AuthError(ERROR.invalid_credentials);
 
         const origin = reqConfig.origin || this.#origin;
         const rpID = reqConfig.rpID || this.#rpID;

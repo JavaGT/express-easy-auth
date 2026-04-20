@@ -33,23 +33,6 @@ export default class SmsContactAdaptor extends ContactAdaptor {
         return true;
     }
 
-    async checkUserLoginRequirements(userIdentifier) {
-        const user = await this.AuthManager.databaseAdapter.findUserByIdentifier(userIdentifier)
-            ?? await this.AuthManager.databaseAdapter.retrieveUserAuthData(userIdentifier);
-
-        if (!user) return null;
-
-        return {
-            requires_password: !!user.password,
-            requires_TOTP: !!user.requires_totp,
-            requires_login_code: !!user.requires_login_code,
-            userId: user.id,
-            email: user.email,
-            primaryContact: user.primary_contact ?? user.email,
-            primaryContactType: user.primary_contact_type ?? 'phone',
-        };
-    }
-
     async sendUserLoginCode(userData, loginCode) {
         const phone = userData.primaryContact ?? userData.phone;
         await this.#sendSms(phone, `Your login code is: ${loginCode}`);
@@ -79,8 +62,7 @@ export default class SmsContactAdaptor extends ContactAdaptor {
         // TODO: Replace this with a real SMS provider. Examples above.
         // ────────────────────────────────────────────────────────────────────────
         if (!to) {
-            console.warn('[SmsContactAdaptor] No phone number available — cannot send SMS');
-            return;
+            throw new Error('Cannot send SMS: no phone number available for this user');
         }
         console.warn(`[SmsContactAdaptor] STUB — would send SMS to ${to}: "${message}"`);
     }

@@ -1,75 +1,55 @@
 import { ERROR, AuthError } from './util/errors.mjs';
 import MultiError from './util/MultiError.mjs';
+import { SESSION_ONLY_SCOPES } from './util/PersonalScopes.mjs';
 
-/**
- * AuthMiddleware - Handles Express middleware for authentication.
- * Separates routing/HTTP concerns from core auth business logic.
- */
 export class AuthMiddleware {
     #authManager;
+    #rateLimitStore;
 
     constructor(authManager) {
         this.#authManager = authManager;
-
-        // Bind methods for Express context
-        this.useApiKey = this.useApiKey.bind(this);
-        this.requireApiKey = this.requireApiKey.bind(this);
-        this.requireAuth = this.requireAuth.bind(this);
-        this.requireAuthOrApiKey = this.requireAuthOrApiKey.bind(this);
-        this.requireFreshAuth = this.requireFreshAuth.bind(this);
-        this.rateLimit = this.rateLimit.bind(this);
-
         this.#rateLimitStore = new Map();
+        setInterval(() => {
+            const now = Date.now();
+            for (const [ip, record] of this.#rateLimitStore) {
+                if (now > record.resetTime) this.#rateLimitStore.delete(ip);
+            }
+        }, 15 * 60 * 1000).unref();
+
+        this.useApiKey              = this.useApiKey.bind(this);
+        this.requireApiKey          = this.requireApiKey.bind(this);
+        this.requireAuth            = this.requireAuth.bind(this);
+        this.requireAuthOrApiKey    = this.requireAuthOrApiKey.bind(this);
+        this.requireFreshAuth       = this.requireFreshAuth.bind(this);
+        this.requireServerScope     = this.requireServerScope.bind(this);
+        this.requirePersonalScope   = this.requirePersonalScope.bind(this);
+        this.requireProjectAccess   = this.requireProjectAccess.bind(this);
+        this.requireProjectOwner    = this.requireProjectOwner.bind(this);
+        this.rateLimit              = this.rateLimit.bind(this);
     }
 
-    #rateLimitStore;
+    // -------------------------------------------------------------------------
+    // Key extraction
+    // -------------------------------------------------------------------------
 
-    /**
-     * Extract an API key from the request using multiple transports:
-     *   1. `X-API-Key` header (canonical)
-     *   2. `Authorization: Bearer sk_...` (when token starts with the `sk_` prefix)
-     *   3. `req.query.apiKey` / `req.body.apiKey` (legacy query/body forms)
-     *
-     * Note: `Authorization: Bearer` tokens that do NOT start with `sk_` are
-     * intentionally ignored here so that session bearer tokens are unaffected.
-     *
-     * @param {import('express').Request} req
-     * @returns {string|null}
-     */
     #extractApiKey(req) {
         if (req.headers['x-api-key']) return req.headers['x-api-key'];
-
-        const authHeader = req.headers['authorization'];
-        if (authHeader?.startsWith('Bearer sk_')) {
-            return authHeader.slice('Bearer '.length);
-        }
-
-        return req.query?.apiKey || req.body?.apiKey || null;
+        const auth = req.headers['authorization'];
+        if (auth?.startsWith('Bearer sk_')) return auth.slice('Bearer '.length);
+        return null;
     }
 
-    /**
-     * Middleware to authenticate via API Key only.
-     * Errors immediately if no valid key is present.
-     *
-     * Accepted transports:
-     *   - `X-API-Key: <key>` header
-     *   - `Authorization: Bearer sk_<key>` header
-     *   - `?apiKey=<key>` query param or `req.body.apiKey`
-     *
-     * Sets `req.user`, `req.scopes`, `req.authType = 'api_key'`.
-     */
+    // -------------------------------------------------------------------------
+    // Core auth middleware
+    // -------------------------------------------------------------------------
+
     async useApiKey(req, res, next) {
-        const apiKey = this.#extractApiKey(req);
-
-        if (!apiKey) {
-            return next(new AuthError(ERROR.api_key_required));
-        }
-
+        const rawKey = this.#extractApiKey(req);
+        if (!rawKey) return next(new AuthError(ERROR.api_key_required));
         try {
-            const authData = await this.#authManager.authenticateApiKey(apiKey);
-            req.user = authData.user;
-            req.apiUser = { id: authData.id };
-            req.scopes = authData.scopes;
+            const authData = await this.#authManager.authenticateApiKey(rawKey);
+            req.user     = authData.user;
+            req.apiKey   = { id: authData.keyId, name: authData.keyName, prefix: authData.keyPrefix, grants: authData.grants };
             req.authType = 'api_key';
             next();
         } catch (err) {
@@ -77,153 +57,256 @@ export class AuthMiddleware {
         }
     }
 
-    /**
-     * Alias for `useApiKey`. Provided to complete the naming trilogy:
-     * `requireAuth` / `requireApiKey` / `requireAuthOrApiKey`.
-     *
-     * Use this when a route must be accessed by API key only (no session).
-     */
     requireApiKey(req, res, next) {
         return this.useApiKey(req, res, next);
     }
 
-    /**
-     * Middleware to require a valid session (cookie-based via express-session).
-     */
     async requireAuth(req, res, next) {
-        if (!req.session?.userId) {
-            return next(new AuthError(ERROR.invalid_session));
-        }
-
+        if (!req.session?.userId) return next(new AuthError(ERROR.invalid_session));
         try {
             const user = await this.#authManager.getUserById(req.session.userId);
             if (!user) return next(new AuthError(ERROR.invalid_session));
-
-            req.user = { id: user.id, email: user.email, display_name: user.display_name };
+            req.user                = { id: user.id, email: user.email, display_name: user.display_name };
             req.lastAuthenticatedAt = req.session.lastAuthenticatedAt ?? 0;
-            req.scopes = req.session.scopes ?? [];
-            req.roles = req.session.roles ?? [];
-            req.authType = 'session';
+            req.authType            = 'session';
             next();
         } catch (err) {
             next(err);
         }
     }
 
-    /**
-     * Middleware to allow either session or API key.
-     */
     async requireAuthOrApiKey(req, res, next) {
         if (req.session?.userId) {
             try {
                 const user = await this.#authManager.getUserById(req.session.userId);
                 if (user) {
-                    req.user = { id: user.id, email: user.email, display_name: user.display_name };
+                    req.user                = { id: user.id, email: user.email, display_name: user.display_name };
                     req.lastAuthenticatedAt = req.session.lastAuthenticatedAt ?? 0;
-                    req.scopes = req.session.scopes ?? [];
-                    req.roles = req.session.roles ?? [];
-                    req.authType = 'session';
+                    req.authType            = 'session';
                     return next();
                 }
-            } catch (_) {}
+            } catch (err) {
+                if (!(err instanceof MultiError) && !err.type) return next(err);
+            }
         }
 
-        const apiKey = this.#extractApiKey(req);
-
-        if (apiKey) {
+        const rawKey = this.#extractApiKey(req);
+        if (rawKey) {
             try {
-                const authData = await this.#authManager.authenticateApiKey(apiKey);
-                req.user = authData.user;
-                req.apiUser = { id: authData.id };
-                req.scopes = authData.scopes || [];
-                req.keyName = authData.name;
+                const authData = await this.#authManager.authenticateApiKey(rawKey);
+                req.user     = authData.user;
+                req.apiKey   = { id: authData.keyId, name: authData.keyName, prefix: authData.keyPrefix, grants: authData.grants };
                 req.authType = 'api_key';
                 return next();
-            } catch (_) {}
+            } catch (err) {
+                if (!(err instanceof MultiError) && !err.type) return next(err);
+            }
         }
 
         next(new AuthError(ERROR.invalid_session));
     }
 
     /**
-     * Middleware to require "fresh" authentication (session re-verified within the last 5 minutes).
+     * Require a fresh session (re-authenticated within the last 5 minutes).
+     * Rejects API key auth. Can be used as plain middleware or as a factory
+     * when you also need to check personal scopes on the same route.
      *
-     * Internally calls `requireAuth` first, so you do NOT need to chain `requireAuth` before this.
-     * API key authentication is explicitly rejected — this guard is for human session flows only.
-     *
-     * Can be used in two ways:
-     *
-     * @example Plain middleware (no scope check)
+     * @example Plain middleware
      * app.delete('/account', auth.requireFreshAuth, handler);
      *
-     * @example Factory with scope enforcement
-     * app.post('/members', auth.requireFreshAuth(['project:manage']), handler);
-     *
-     * @param {string[]|import('express').Request} scopesOrReq
-     *   When called as a factory, pass the required scopes array.
-     *   When used directly as middleware, Express passes `req` here.
+     * @example Factory with scope check
+     * app.post('/me/something', auth.requireFreshAuth(['personal:auth.write']), handler);
      */
     requireFreshAuth(scopesOrReq, res, next) {
-        // Factory mode: requireFreshAuth(['scope:a', 'scope:b'])
         if (Array.isArray(scopesOrReq)) {
-            const requiredScopes = scopesOrReq;
-            return (req, res, next) => this.#runFreshAuth(req, res, next, requiredScopes);
+            const scopes = scopesOrReq;
+            return (req, res, next) => this.#runFreshAuth(req, res, next, scopes);
         }
-        // Plain middleware mode: requireFreshAuth used directly on a route
         return this.#runFreshAuth(scopesOrReq, res, next, []);
     }
 
     async #runFreshAuth(req, res, next, requiredScopes = []) {
-        if (req.authType === 'api_key') {
-            return next(new AuthError(ERROR.session_expired));
-        }
-
+        if (req.authType === 'api_key') return next(new AuthError(ERROR.insufficient_scope, 'This action requires an interactive session and cannot be performed with an API key'));
         await this.requireAuth(req, res, (err) => {
             if (err) return next(err);
-
-            const FRESHNESS_WINDOW = 5 * 60 * 1000; // 5 minutes
-            const timeSinceAuth = Date.now() - req.lastAuthenticatedAt;
-
-            if (timeSinceAuth > FRESHNESS_WINDOW) {
-                return next(new AuthError(ERROR.session_step_up_required));
-            }
-
+            const fresh = Date.now() - req.lastAuthenticatedAt <= 5 * 60 * 1000;
+            if (!fresh) return next(new AuthError(ERROR.session_step_up_required));
             if (requiredScopes.length > 0) {
-                const userScopes = req.scopes || [];
-                const hasAll = requiredScopes.every(
-                    s => userScopes.includes(s) || userScopes.includes('*')
-                );
-                if (!hasAll) {
-                    return next(new AuthError(ERROR.insufficient_scope));
-                }
+                return this.requirePersonalScope(requiredScopes)(req, res, next);
             }
-
             next();
         });
     }
 
+    // -------------------------------------------------------------------------
+    // Server-scope middleware
+    // -------------------------------------------------------------------------
+
     /**
-     * Generic rate limiting middleware.
-     * @param {Object} options
-     * @param {number} options.windowMs - Time window in milliseconds (default: 15 mins)
-     * @param {number} options.max - Max requests per window (default: 100)
+     * Factory. Checks that the authenticated identity holds the required server scope(s).
+     * For API key callers: effective = declared ∩ user's current server scopes.
+     *
+     * @param {string|string[]} scopes
      */
+    requireServerScope(scopes) {
+        const required = Array.isArray(scopes) ? scopes : [scopes];
+        return async (req, res, next) => {
+            if (!req.user) return next(new AuthError(ERROR.invalid_session));
+            try {
+                const userScopes = await this.#authManager.getUserServerScopes(req.user.id);
+                let effective;
+                if (req.authType === 'api_key') {
+                    const declared = req.apiKey?.grants?.server ?? [];
+                    effective = declared.filter(s => userScopes.includes(s));
+                } else {
+                    effective = userScopes;
+                }
+                if (!required.every(s => effective.includes(s))) {
+                    return next(new AuthError(ERROR.insufficient_scope));
+                }
+                req.serverScopes = effective;
+                next();
+            } catch (err) {
+                next(err);
+            }
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Personal-scope middleware
+    // -------------------------------------------------------------------------
+
+    /**
+     * Factory. Checks that the caller holds the required personal scope(s).
+     * Session callers implicitly hold all personal scopes.
+     * API key callers must have declared the scope; session-only scopes always reject API key callers.
+     *
+     * @param {string|string[]} scopes
+     */
+    requirePersonalScope(scopes) {
+        const required = Array.isArray(scopes) ? scopes : [scopes];
+        return (req, res, next) => {
+            if (!req.user) return next(new AuthError(ERROR.invalid_session));
+
+            const sessionOnly = required.filter(s => SESSION_ONLY_SCOPES.includes(s));
+            if (sessionOnly.length > 0 && req.authType === 'api_key') {
+                return next(new AuthError(
+                    ERROR.insufficient_scope,
+                    `${sessionOnly[0]} requires an interactive session and cannot be used with an API key`
+                ));
+            }
+
+            if (req.authType === 'api_key') {
+                const declared = req.apiKey?.grants?.personal ?? [];
+                if (!required.every(s => declared.includes(s))) {
+                    return next(new AuthError(ERROR.insufficient_scope));
+                }
+            }
+            // Session callers implicitly hold all personal scopes.
+            next();
+        };
+    }
+
+    // -------------------------------------------------------------------------
+    // Project-scope middleware
+    // -------------------------------------------------------------------------
+
+    /**
+     * Factory. Checks that the caller has the required scope(s) on the current project.
+     *
+     * Requires:
+     *   - req.user to be set (run requireAuth / requireAuthOrApiKey first)
+     *   - req.projectPermissions to be set (run your loadProjectPermissions middleware first)
+     *
+     * Project ID is resolved from:
+     *   req.params.projectId ?? req.params.id ?? req.projectId
+     *
+     * After successful check, sets req.effectiveProjectScopes.
+     *
+     * @param {string|string[]} scopes
+     */
+    requireProjectAccess(scopes) {
+        const required = Array.isArray(scopes) ? scopes : [scopes];
+        return (req, res, next) => {
+            if (!req.user) return next(new AuthError(ERROR.invalid_session));
+
+            if (req.projectPermissions === undefined) {
+                return next(new AuthError(ERROR.project_permissions_not_loaded));
+            }
+
+            const currentPerms = req.projectPermissions;
+
+            if (currentPerms.length === 0) {
+                return next(new AuthError(ERROR.not_a_member));
+            }
+
+            let effective;
+            if (req.authType === 'api_key') {
+                const projectId = req.params?.projectId ?? req.params?.id ?? req.projectId;
+                const declared  = req.apiKey?.grants?.projects?.[projectId] ?? [];
+                effective = currentPerms.includes('*')
+                    ? declared
+                    : declared.filter(s => currentPerms.includes(s));
+            } else {
+                effective = currentPerms;
+            }
+
+            const hasAll = required.every(s => effective.includes(s) || effective.includes('*'));
+            if (!hasAll) return next(new AuthError(ERROR.insufficient_scope));
+
+            req.effectiveProjectScopes = effective;
+            next();
+        };
+    }
+
+    /**
+     * Middleware. Checks that req.user is the owner of the current project.
+     * Project ID resolved from: req.params.projectId ?? req.params.id ?? req.projectId
+     *
+     * Use for destructive operations (delete project, transfer ownership).
+     */
+    async requireProjectOwner(req, res, next) {
+        if (!req.user) return next(new AuthError(ERROR.invalid_session));
+        const projectId = req.params?.projectId ?? req.params?.id ?? req.projectId;
+        if (!projectId) return next(new AuthError(ERROR.project_not_found, 'Could not resolve project ID from request'));
+        try {
+            const isOwner = await this.#authManager.isProjectOwner(projectId, req.user.id);
+            if (!isOwner) return next(new AuthError(ERROR.not_project_owner));
+            next();
+        } catch (err) {
+            next(err);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Rate limiting
+    // -------------------------------------------------------------------------
+
     rateLimit(options = {}) {
         const windowMs = options.windowMs || 15 * 60 * 1000;
-        const max = options.max || 100;
-        const message = options.message || 'Too many requests, please try again later.';
+        const max      = options.max      || 100;
+        const message  = options.message  || 'Too many requests, please try again later.';
+
+        // Each rateLimit() call gets its own isolated store so independent
+        // limiters (e.g. login vs register) do not share buckets.
+        const store = new Map();
+        setInterval(() => {
+            const now = Date.now();
+            for (const [ip, record] of store) {
+                if (now > record.resetTime) store.delete(ip);
+            }
+        }, windowMs).unref();
 
         return (req, res, next) => {
-            const ip = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+            const ip  = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
             const now = Date.now();
 
-            if (!this.#rateLimitStore.has(ip)) {
-                this.#rateLimitStore.set(ip, { count: 1, resetTime: now + windowMs });
+            if (!store.has(ip)) {
+                store.set(ip, { count: 1, resetTime: now + windowMs });
                 return next();
             }
 
-            const record = this.#rateLimitStore.get(ip);
-
+            const record = store.get(ip);
             if (now > record.resetTime) {
                 record.count = 1;
                 record.resetTime = now + windowMs;
@@ -231,22 +314,17 @@ export class AuthMiddleware {
             }
 
             record.count++;
-
             if (record.count > max) {
-                return res.status(429).json({
-                    success: false,
-                    error: 'TOO_MANY_REQUESTS',
-                    message
-                });
+                return res.status(429).json({ success: false, error: 'TOO_MANY_REQUESTS', message });
             }
-
             next();
         };
     }
 
-    /**
-     * Unified error handling middleware for Express.
-     */
+    // -------------------------------------------------------------------------
+    // Error handling
+    // -------------------------------------------------------------------------
+
     static errorHandler(err, req, res, next) {
         const { status, body } = AuthMiddleware.processError(err);
         res.status(status).json(body);
@@ -254,32 +332,14 @@ export class AuthMiddleware {
 
     static processError(err) {
         if (err instanceof MultiError) {
-            return {
-                status: 400,
-                body: {
-                    success: false,
-                    error: 'VALIDATION_FAILED',
-                    errors: err.errors
-                }
-            };
+            return { status: 400, body: { success: false, error: 'VALIDATION_FAILED', errors: err.errors } };
         }
-
         if (err.toJSON) {
-            const json = err.toJSON();
-            return {
-                status: typeof err.code === 'number' ? err.code : 400,
-                body: json
-            };
+            return { status: typeof err.code === 'number' ? err.code : 400, body: err.toJSON() };
         }
-
-        const status = typeof err.code === 'number' ? err.code : 500;
         return {
-            status,
-            body: {
-                success: false,
-                error: 'INTERNAL_ERROR',
-                message: err.message || 'An unexpected error occurred'
-            }
+            status: typeof err.code === 'number' ? err.code : 500,
+            body: { success: false, error: 'INTERNAL_ERROR', message: err.message || 'An unexpected error occurred' },
         };
     }
 }
