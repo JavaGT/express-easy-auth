@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node demo/demo1-color-server-logs/main-server.mjs",
     "dev": "node --watch demo/demo1-color-server-logs/main-server.mjs",
-    "dev:chat":     "node --watch demo/demo2-chat-app/main-server.mjs",
+    "dev:chat": "node --watch demo/demo2-chat-app/main-server.mjs",
     "dev:docuflow": "node --watch demo/demo3-docuflow/server.mjs"
   },
   "dependencies": {
@@ -37,5 +37,9 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JavaGT/express-easy-auth.git"
   }
 }
